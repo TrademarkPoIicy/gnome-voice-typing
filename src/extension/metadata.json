@@ -1,0 +1,16 @@
+{
+  "uuid": "voice-typing@gnome-voice-typing.github.io",
+  "name": "Voice Typing Overlay",
+  "description": "Floating, non-focus-stealing bar for the gnome-voice-typing offline dictation tool: shows the listening state, model and settings, and sits next to the text box you are typing in. Needs the gnome-voice-typing daemon (installed by its install.sh).",
+  "shell-version": [
+    "45",
+    "46",
+    "47",
+    "48",
+    "49",
+    "50",
+    "51"
+  ],
+  "version": 1,
+  "url": "https://github.com/TrademarkPoIicy/gnome-voice-typing"
+}

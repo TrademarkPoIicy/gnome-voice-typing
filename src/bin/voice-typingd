@@ -1,0 +1,6 @@
+#!/bin/bash
+# Starts the background daemon with the Python environment created by install.sh.
+N="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+PY="$N/venv/bin/python"
+[ -x "$PY" ] || PY="$(command -v python3)"
+exec "$PY" "$N/bin/dictated.py" "$@"

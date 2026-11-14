@@ -1,0 +1,317 @@
+{
+ "_comment": "Pinned model sources. install.sh / voice-typing-models download ONLY from these URLs and verify sha256 before use.",
+ "models": {
+  "parakeet-gpu": {
+   "engine": "ggml-vulkan",
+   "license": "CC-BY-4.0",
+   "attribution": "Parakeet-TDT 0.6B v3 \u00a9 NVIDIA, CC BY 4.0 (https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3). GGML conversion: ggml-org/parakeet-GGUF.",
+   "upstream": "https://huggingface.co/ggml-org/parakeet-GGUF",
+   "needs": "vulkan",
+   "files": [
+    {
+     "url": "https://huggingface.co/ggml-org/parakeet-GGUF/resolve/35156454d1a39de06863303dd209fd2bed6ee079/ggml-parakeet-tdt-0.6b-v3-f16.bin",
+     "sha256": "833bffc9513b2cae867ee9e51633cfd11e4d51aaa5597c8ac02159385a2b426f",
+     "size": 1255897319,
+     "dest": "ggml/ggml-parakeet-tdt-0.6b-v3-f16.bin"
+    }
+   ]
+  },
+  "small.en-gpu": {
+   "engine": "ggml-vulkan",
+   "license": "MIT",
+   "attribution": "OpenAI Whisper \u00a9 OpenAI, MIT License (https://github.com/openai/whisper). GGML conversion: ggerganov/whisper.cpp.",
+   "upstream": "https://huggingface.co/ggerganov/whisper.cpp",
+   "needs": "vulkan",
+   "files": [
+    {
+     "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-small.en.bin",
+     "sha256": "c6138d6d58ecc8322097e0f987c32f1be8bb0a18532a3f88f734d1bbf9c41e5d",
+     "size": 487614201,
+     "dest": "ggml/ggml-small.en.bin"
+    }
+   ]
+  },
+  "medium.en-q5-gpu": {
+   "engine": "ggml-vulkan",
+   "license": "MIT",
+   "attribution": "OpenAI Whisper \u00a9 OpenAI, MIT License (https://github.com/openai/whisper). GGML conversion: ggerganov/whisper.cpp.",
+   "upstream": "https://huggingface.co/ggerganov/whisper.cpp",
+   "needs": "vulkan",
+   "files": [
+    {
+     "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-medium.en-q5_0.bin",
+     "sha256": "76733e26ad8fe1c7a5bf7531a9d41917b2adc0f20f2e4f5531688a8c6cd88eb0",
+     "size": 539225533,
+     "dest": "ggml/ggml-medium.en-q5_0.bin"
+    }
+   ]
+  },
+  "large-v3-turbo-gpu": {
+   "engine": "ggml-vulkan",
+   "license": "MIT",
+   "attribution": "OpenAI Whisper \u00a9 OpenAI, MIT License (https://github.com/openai/whisper). GGML conversion: ggerganov/whisper.cpp.",
+   "upstream": "https://huggingface.co/ggerganov/whisper.cpp",
+   "needs": "vulkan",
+   "files": [
+    {
+     "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-large-v3-turbo-q5_0.bin",
+     "sha256": "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2",
+     "size": 574041195,
+     "dest": "ggml/ggml-large-v3-turbo-q5_0.bin"
+    }
+   ]
+  },
+  "parakeet": {
+   "engine": "sherpa-onnx",
+   "license": "CC-BY-4.0",
+   "needs": "",
+   "upstream": "https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2",
+   "attribution": "Parakeet-TDT 0.6B v2 \u00a9 NVIDIA, CC BY 4.0 (https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2). int8 ONNX export: k2-fsa/sherpa-onnx.",
+   "archive": {
+    "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8.tar.bz2",
+    "sha256": "6fc4426b54aa549a0019b8a75b8dea59164e71790a37ac56a045ad57f915f714",
+    "size": 482440461,
+    "dir": "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8",
+    "dest": "sherpa"
+   }
+  },
+  "moonshine-base": {
+   "engine": "sherpa-onnx",
+   "license": "MIT",
+   "needs": "",
+   "upstream": "https://github.com/usefulsensors/moonshine",
+   "attribution": "Moonshine \u00a9 Useful Sensors, MIT License. int8 ONNX export: k2-fsa/sherpa-onnx.",
+   "archive": {
+    "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-moonshine-base-en-int8.tar.bz2",
+    "sha256": "21870cecaa2e44e4e2bf63e02d1072bed183ccd10284871353bd9d24dad14e5e",
+    "size": 250807309,
+    "dir": "sherpa-onnx-moonshine-base-en-int8",
+    "dest": "sherpa"
+   }
+  },
+  "moonshine-tiny": {
+   "engine": "sherpa-onnx",
+   "license": "MIT",
+   "needs": "",
+   "upstream": "https://github.com/usefulsensors/moonshine",
+   "attribution": "Moonshine \u00a9 Useful Sensors, MIT License. int8 ONNX export: k2-fsa/sherpa-onnx.",
+   "archive": {
+    "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-moonshine-tiny-en-int8.tar.bz2",
+    "sha256": "d5fe6ec4334fef36255b2a4010412cad4c007e33103fec62fb5d17cad88086f2",
+    "size": 107600538,
+    "dir": "sherpa-onnx-moonshine-tiny-en-int8",
+    "dest": "sherpa"
+   }
+  },
+  "tiny.en": {
+   "engine": "faster-whisper",
+   "license": "MIT",
+   "needs": "faster-whisper",
+   "upstream": "https://huggingface.co/Systran/faster-whisper-tiny.en",
+   "attribution": "OpenAI Whisper \u00a9 OpenAI, MIT License; CTranslate2 conversion by Systran (faster-whisper).",
+   "files": [
+    {
+     "url": "https://huggingface.co/Systran/faster-whisper-tiny.en/resolve/0d3d19a32d3338f10357c0889762bd8d64bbdeba/config.json",
+     "sha256": "14b1b421a90349bc551b881461426b561a874049cb9e4c4864f2ca384f6a7cc5",
+     "size": 2317,
+     "dest": "ct2/tiny.en/config.json"
+    },
+    {
+     "url": "https://huggingface.co/Systran/faster-whisper-tiny.en/resolve/0d3d19a32d3338f10357c0889762bd8d64bbdeba/model.bin",
+     "sha256": "1a5afae06a4db91c975c9a9d78be5cc110ee4ea022ad57d55492e4550e936b2a",
+     "size": 75537502,
+     "dest": "ct2/tiny.en/model.bin"
+    },
+    {
+     "url": "https://huggingface.co/Systran/faster-whisper-tiny.en/resolve/0d3d19a32d3338f10357c0889762bd8d64bbdeba/tokenizer.json",
+     "sha256": "929c5252409436dce1b38a75d1abbcb5e132d170d8e324e4e04ed915fa2d22df",
+     "size": 2128466,
+     "dest": "ct2/tiny.en/tokenizer.json"
+    },
+    {
+     "url": "https://huggingface.co/Systran/faster-whisper-tiny.en/resolve/0d3d19a32d3338f10357c0889762bd8d64bbdeba/vocabulary.txt",
+     "sha256": "ff77588746d3a2595d32ab5b69ffd7b95ce2441ac57533cb66fc3eb575a115cf",
+     "size": 422309,
+     "dest": "ct2/tiny.en/vocabulary.txt"
+    }
+   ]
+  },
+  "base.en": {
+   "engine": "faster-whisper",
+   "license": "MIT",
+   "needs": "faster-whisper",
+   "upstream": "https://huggingface.co/Systran/faster-whisper-base.en",
+   "attribution": "OpenAI Whisper \u00a9 OpenAI, MIT License; CTranslate2 conversion by Systran (faster-whisper).",
+   "files": [
+    {
+     "url": "https://huggingface.co/Systran/faster-whisper-base.en/resolve/3d3d5dee26484f91867d81cb899cfcf72b96be6c/config.json",
+     "sha256": "f3bc3821e9fc76a27bae538e11ae5b677dcdd352b4600429ce7951d398569aeb",
+     "size": 2227,
+     "dest": "ct2/base.en/config.json"
+    },
+    {
+     "url": "https://huggingface.co/Systran/faster-whisper-base.en/resolve/3d3d5dee26484f91867d81cb899cfcf72b96be6c/model.bin",
+     "sha256": "2a166925539a16005f14ff328359f9b9adb9dc4fb631bb3b227526862e93e2ef",
+     "size": 145216508,
+     "dest": "ct2/base.en/model.bin"
+    },
+    {
+     "url": "https://huggingface.co/Systran/faster-whisper-base.en/resolve/3d3d5dee26484f91867d81cb899cfcf72b96be6c/tokenizer.json",
+     "sha256": "929c5252409436dce1b38a75d1abbcb5e132d170d8e324e4e04ed915fa2d22df",
+     "size": 2128466,
+     "dest": "ct2/base.en/tokenizer.json"
+    },
+    {
+     "url": "https://huggingface.co/Systran/faster-whisper-base.en/resolve/3d3d5dee26484f91867d81cb899cfcf72b96be6c/vocabulary.txt",
+     "sha256": "ff77588746d3a2595d32ab5b69ffd7b95ce2441ac57533cb66fc3eb575a115cf",
+     "size": 422309,
+     "dest": "ct2/base.en/vocabulary.txt"
+    }
+   ]
+  },
+  "small.en": {
+   "engine": "faster-whisper",
+   "license": "MIT",
+   "needs": "faster-whisper",
+   "upstream": "https://huggingface.co/Systran/faster-whisper-small.en",
+   "attribution": "OpenAI Whisper \u00a9 OpenAI, MIT License; CTranslate2 conversion by Systran (faster-whisper).",
+   "files": [
+    {
+     "url": "https://huggingface.co/Systran/faster-whisper-small.en/resolve/d1d751a5f8271d482d14ca55d9e2deeebbae577f/config.json",
+     "sha256": "666a9605530ac1f61fa8177f3702b4dacec9966749e42610839fcc32661d5fae",
+     "size": 2657,
+     "dest": "ct2/small.en/config.json"
+    },
+    {
+     "url": "https://huggingface.co/Systran/faster-whisper-small.en/resolve/d1d751a5f8271d482d14ca55d9e2deeebbae577f/model.bin",
+     "sha256": "62b2a45b05ee59acb4a5341b33ee35e041395d378d418a18acfe4c9e768ee37a",
+     "size": 483545366,
+     "dest": "ct2/small.en/model.bin"
+    },
+    {
+     "url": "https://huggingface.co/Systran/faster-whisper-small.en/resolve/d1d751a5f8271d482d14ca55d9e2deeebbae577f/tokenizer.json",
+     "sha256": "929c5252409436dce1b38a75d1abbcb5e132d170d8e324e4e04ed915fa2d22df",
+     "size": 2128466,
+     "dest": "ct2/small.en/tokenizer.json"
+    },
+    {
+     "url": "https://huggingface.co/Systran/faster-whisper-small.en/resolve/d1d751a5f8271d482d14ca55d9e2deeebbae577f/vocabulary.txt",
+     "sha256": "ff77588746d3a2595d32ab5b69ffd7b95ce2441ac57533cb66fc3eb575a115cf",
+     "size": 422309,
+     "dest": "ct2/small.en/vocabulary.txt"
+    }
+   ]
+  },
+  "medium.en": {
+   "engine": "faster-whisper",
+   "license": "MIT",
+   "needs": "faster-whisper",
+   "upstream": "https://huggingface.co/Systran/faster-whisper-medium.en",
+   "attribution": "OpenAI Whisper \u00a9 OpenAI, MIT License; CTranslate2 conversion by Systran (faster-whisper).",
+   "files": [
+    {
+     "url": "https://huggingface.co/Systran/faster-whisper-medium.en/resolve/a29b04bd15381511a9af671baec01072039215e3/config.json",
+     "sha256": "4a1848ebabe7938d9797c15a2e8e4ce1d36e6fd4a43d096ae5955257c67c7962",
+     "size": 2643,
+     "dest": "ct2/medium.en/config.json"
+    },
+    {
+     "url": "https://huggingface.co/Systran/faster-whisper-medium.en/resolve/a29b04bd15381511a9af671baec01072039215e3/model.bin",
+     "sha256": "11b220779aea4c6f3ce9d2549c8a95ea869ed84066864b999531ef53e594fe5b",
+     "size": 1527904330,
+     "dest": "ct2/medium.en/model.bin"
+    },
+    {
+     "url": "https://huggingface.co/Systran/faster-whisper-medium.en/resolve/a29b04bd15381511a9af671baec01072039215e3/tokenizer.json",
+     "sha256": "929c5252409436dce1b38a75d1abbcb5e132d170d8e324e4e04ed915fa2d22df",
+     "size": 2128466,
+     "dest": "ct2/medium.en/tokenizer.json"
+    },
+    {
+     "url": "https://huggingface.co/Systran/faster-whisper-medium.en/resolve/a29b04bd15381511a9af671baec01072039215e3/vocabulary.txt",
+     "sha256": "ff77588746d3a2595d32ab5b69ffd7b95ce2441ac57533cb66fc3eb575a115cf",
+     "size": 422309,
+     "dest": "ct2/medium.en/vocabulary.txt"
+    }
+   ]
+  },
+  "distil-small.en": {
+   "engine": "faster-whisper",
+   "license": "MIT",
+   "needs": "faster-whisper",
+   "upstream": "https://huggingface.co/Systran/faster-distil-whisper-small.en",
+   "attribution": "Distil-Whisper \u00a9 Hugging Face, MIT License; CTranslate2 conversion by Systran.",
+   "files": [
+    {
+     "url": "https://huggingface.co/Systran/faster-distil-whisper-small.en/resolve/ef77d90526ccd62cde3808ee70626a01e5cf83e4/config.json",
+     "sha256": "b571ae8022a34c1df50876a65b5f813a5c22e5ee3b87bc0e4db5662dfc9c2c3d",
+     "size": 2812,
+     "dest": "ct2/distil-small.en/config.json"
+    },
+    {
+     "url": "https://huggingface.co/Systran/faster-distil-whisper-small.en/resolve/ef77d90526ccd62cde3808ee70626a01e5cf83e4/model.bin",
+     "sha256": "1187de3982cdcf962a2fb8f797e429fb4651b875b18fe9ce50b58b52fc9072b7",
+     "size": 332308257,
+     "dest": "ct2/distil-small.en/model.bin"
+    },
+    {
+     "url": "https://huggingface.co/Systran/faster-distil-whisper-small.en/resolve/ef77d90526ccd62cde3808ee70626a01e5cf83e4/preprocessor_config.json",
+     "sha256": "a6a76d28c93edb273669eb9e0b0636a2bddbb1272c3261e47b7ca6dfdbac1b8d",
+     "size": 339,
+     "dest": "ct2/distil-small.en/preprocessor_config.json"
+    },
+    {
+     "url": "https://huggingface.co/Systran/faster-distil-whisper-small.en/resolve/ef77d90526ccd62cde3808ee70626a01e5cf83e4/tokenizer.json",
+     "sha256": "c9c77688528c0509abbd41873edab16384b8f041531b1d3092ab4d1d83a02a50",
+     "size": 2405466,
+     "dest": "ct2/distil-small.en/tokenizer.json"
+    },
+    {
+     "url": "https://huggingface.co/Systran/faster-distil-whisper-small.en/resolve/ef77d90526ccd62cde3808ee70626a01e5cf83e4/vocabulary.json",
+     "sha256": "4dadfee7c4a871665f65c06037f5f5ec893fb2d7f5eb4cf11063618e31dbe11a",
+     "size": 825480,
+     "dest": "ct2/distil-small.en/vocabulary.json"
+    }
+   ]
+  },
+  "distil-large-v3": {
+   "engine": "faster-whisper",
+   "license": "MIT",
+   "needs": "faster-whisper",
+   "upstream": "https://huggingface.co/Systran/faster-distil-whisper-large-v3",
+   "attribution": "Distil-Whisper \u00a9 Hugging Face, MIT License; CTranslate2 conversion by Systran.",
+   "files": [
+    {
+     "url": "https://huggingface.co/Systran/faster-distil-whisper-large-v3/resolve/c3058b475261292e64a0412df1d2681c06260fab/config.json",
+     "sha256": "90c55f775cc4e0bb17293d0bf12f96557a486f20dea886fabd8e6075a3588b21",
+     "size": 2690,
+     "dest": "ct2/distil-large-v3/config.json"
+    },
+    {
+     "url": "https://huggingface.co/Systran/faster-distil-whisper-large-v3/resolve/c3058b475261292e64a0412df1d2681c06260fab/model.bin",
+     "sha256": "b79368e19b6623813609431a6e5ee309a71506701ebc49fd7820e692dec7c5f5",
+     "size": 1512927867,
+     "dest": "ct2/distil-large-v3/model.bin"
+    },
+    {
+     "url": "https://huggingface.co/Systran/faster-distil-whisper-large-v3/resolve/c3058b475261292e64a0412df1d2681c06260fab/preprocessor_config.json",
+     "sha256": "7ccc62c6f2765af1f3b46c00c9b5894426835a05021c8b9c01eecb6dfb542711",
+     "size": 340,
+     "dest": "ct2/distil-large-v3/preprocessor_config.json"
+    },
+    {
+     "url": "https://huggingface.co/Systran/faster-distil-whisper-large-v3/resolve/c3058b475261292e64a0412df1d2681c06260fab/tokenizer.json",
+     "sha256": "6d8cbd7cd0d8d5815e478dac67b85a26bbe77c1f5e0c6d76d1ce2abc0e5f21ca",
+     "size": 2480617,
+     "dest": "ct2/distil-large-v3/tokenizer.json"
+    },
+    {
+     "url": "https://huggingface.co/Systran/faster-distil-whisper-large-v3/resolve/c3058b475261292e64a0412df1d2681c06260fab/vocabulary.json",
+     "sha256": "c69260f2ab26d659b7c398f9a2b2b48ed0df16c3b47d7326782fd9cba71690c1",
+     "size": 1068114,
+     "dest": "ct2/distil-large-v3/vocabulary.json"
+    }
+   ]
+  }
+ }
+}

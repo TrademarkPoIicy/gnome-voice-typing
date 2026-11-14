@@ -1,0 +1,8 @@
+#!/bin/bash
+# voice-typing [toggle|start|pause|resume|close|status|quit|--models|--model ID|--apply JSON|--check]
+# This is what the keyboard shortcut runs. It talks to the background daemon (starting it if needed).
+N="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+RT="${XDG_RUNTIME_DIR:-/tmp/gnome-voice-typing-$(id -u)}"
+# status with no daemon running: say so explicitly
+if [ "$1" = status ] && [ ! -S "$RT/gnome-voice-typing.sock" ]; then echo '{"state": "stopped"}'; exit 0; fi
+exec /usr/bin/env python3 "$N/bin/dclient.py" "$@"

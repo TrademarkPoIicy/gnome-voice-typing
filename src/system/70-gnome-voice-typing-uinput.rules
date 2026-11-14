@@ -1,0 +1,3 @@
+# gnome-voice-typing: let the logged-in desktop user create virtual keyboard events through /dev/uinput
+# (used by ydotool to type the recognised text into the focused window). Remove with uninstall.sh.
+KERNEL=="uinput", SUBSYSTEM=="misc", OPTIONS+="static_node=uinput", TAG+="uaccess"

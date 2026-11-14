@@ -1,0 +1,119 @@
+[
+ {
+  "id": "parakeet-gpu",
+  "backend": "vk",
+  "name": "Parakeet-TDT 0.6B v3 (GPU)",
+  "label": "Best accuracy, instant (GPU)",
+  "speed": "~0.03 s",
+  "impact": "Medium",
+  "impact_detail": "~1.4 GB VRAM · uses the graphics card in short bursts while transcribing, idle otherwise · ~130 MB RAM"
+ },
+ {
+  "id": "small.en-gpu",
+  "backend": "vk",
+  "name": "Whisper small.en (GPU)",
+  "label": "Fast, good accuracy (GPU)",
+  "speed": "~0.06 s",
+  "impact": "Medium",
+  "impact_detail": "~770 MB VRAM · uses the graphics card in short bursts while transcribing, idle otherwise · ~140 MB RAM"
+ },
+ {
+  "id": "medium.en-q5-gpu",
+  "backend": "vk",
+  "name": "Whisper medium.en q5 (GPU)",
+  "label": "More accurate, still fast (GPU)",
+  "speed": "~0.12 s",
+  "impact": "Medium",
+  "impact_detail": "~1.0 GB VRAM · uses the graphics card in short bursts while transcribing, idle otherwise · ~150 MB RAM"
+ },
+ {
+  "id": "large-v3-turbo-gpu",
+  "backend": "vk",
+  "name": "Whisper large-v3-turbo q5 (GPU)",
+  "label": "Large model, fast (GPU)",
+  "speed": "~0.1 s",
+  "impact": "Medium",
+  "impact_detail": "~910 MB VRAM · uses the graphics card in short bursts while transcribing, idle otherwise · ~150 MB RAM"
+ },
+ {
+  "id": "parakeet",
+  "backend": "sherpa",
+  "name": "Parakeet-TDT 0.6B",
+  "label": "Best accuracy, very fast",
+  "speed": "~0.15 s",
+  "impact": "Heavy",
+  "impact_detail": "Uses the processor (many cores) in short bursts while transcribing, idle otherwise · ~1.1 GB RAM"
+ },
+ {
+  "id": "moonshine-base",
+  "backend": "sherpa",
+  "name": "Moonshine base",
+  "label": "Fastest, good accuracy",
+  "speed": "~0.1 s",
+  "impact": "Heavy",
+  "impact_detail": "Uses the processor (many cores) in short bursts while transcribing, idle otherwise · ~410 MB RAM"
+ },
+ {
+  "id": "moonshine-tiny",
+  "backend": "sherpa",
+  "name": "Moonshine tiny",
+  "label": "Instant, lower accuracy",
+  "speed": "~0.05 s",
+  "impact": "Heavy",
+  "impact_detail": "Uses the processor (many cores) in short bursts while transcribing, idle otherwise · ~220 MB RAM"
+ },
+ {
+  "id": "tiny.en",
+  "backend": "ct2",
+  "name": "Whisper tiny.en",
+  "label": "Instant, lowest accuracy",
+  "speed": "~0.15 s",
+  "impact": "Medium",
+  "impact_detail": "Uses the processor (many cores) in short bursts while transcribing, idle otherwise · ~230 MB RAM"
+ },
+ {
+  "id": "base.en",
+  "backend": "ct2",
+  "name": "Whisper base.en",
+  "label": "Fast, fair accuracy",
+  "speed": "~0.25 s",
+  "impact": "Medium",
+  "impact_detail": "Uses the processor (many cores) in short bursts while transcribing, idle otherwise · ~270 MB RAM"
+ },
+ {
+  "id": "small.en",
+  "backend": "ct2",
+  "name": "Whisper small.en",
+  "label": "Balanced",
+  "speed": "~0.65 s",
+  "impact": "Medium",
+  "impact_detail": "Uses the processor (many cores) in short bursts while transcribing, idle otherwise · ~500 MB RAM"
+ },
+ {
+  "id": "distil-small.en",
+  "backend": "ct2",
+  "name": "Whisper distil-small.en",
+  "label": "Balanced, distilled",
+  "speed": "~0.55 s",
+  "impact": "Medium",
+  "impact_detail": "Uses the processor (many cores) in short bursts while transcribing, idle otherwise · ~420 MB RAM"
+ },
+ {
+  "id": "medium.en",
+  "backend": "ct2",
+  "name": "Whisper medium.en",
+  "label": "Accurate, slower",
+  "speed": "~1.8 s",
+  "impact": "Heavy",
+  "impact_detail": "Uses the processor (many cores) in short bursts while transcribing, idle otherwise · ~1.2 GB RAM"
+ },
+ {
+  "id": "distil-large-v3",
+  "backend": "ct2",
+  "name": "Whisper distil-large-v3",
+  "label": "Very accurate, slow",
+  "speed": "~2.3 s",
+  "impact": "Heavy",
+  "impact_detail": "Uses the processor (many cores) in short bursts while transcribing, idle otherwise · ~1.0 GB RAM"
+ }
+]

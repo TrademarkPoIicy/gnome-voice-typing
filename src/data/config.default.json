@@ -1,0 +1,11 @@
+{
+  "backend": "vk",
+  "model": "parakeet-gpu",
+  "device": "gpu",
+  "sounds": true,
+  "end_silence": 0.7,
+  "auto_pause_seconds": 60,
+  "auto_close_paused_seconds": 300,
+  "ydotool_key_delay_ms": 6,
+  "mic": ""
+}

@@ -1,0 +1,5 @@
+#!/bin/sh
+# voice-typing-models list | install ID... | remove ID... | verify [ID...] | licenses
+N="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+PY="$N/venv/bin/python"; [ -x "$PY" ] || PY="$(command -v python3)"
+exec "$PY" "$N/bin/models_tool.py" "$@"

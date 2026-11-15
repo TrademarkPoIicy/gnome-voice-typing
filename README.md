@@ -22,7 +22,8 @@ the text box you are typing in.
   accessibility interface, AT-SPI); red close button; start/stop chimes (original sounds, can be turned off).
 - Settings (gear icon): model picker with a clear Light / Medium / Heavy system-impact tag, **Run on: graphics card or processor**
   (if one fails to load, the other is used automatically), pause after silence (10 s / 30 s / 1 min / 2 min / never), microphone,
-  sounds on/off.
+  sounds on/off, noise suppression, background noise Auto / Manual with Calibrate, sensitivity and a live noise-level meter, and
+  **Uninstall Voice Typing** (removes everything, one password prompt for the udev rule).
 - Many models: Parakeet v3 (GPU) and v2 (CPU), Whisper (tiny to large-v3-turbo, GPU and CPU), Moonshine. **One-click installs:** the
   installer downloads just one default model; every model is always listed in the settings panel, and **Download** (with its size)
   fetches, checksum-verifies and installs it, with a progress bar and Cancel. Installed models show **Uninstall** (not available for

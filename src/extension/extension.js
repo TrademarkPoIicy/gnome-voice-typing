@@ -180,6 +180,7 @@ export default class VoiceTypingOverlay extends Extension {
         this._last = GLib.get_monotonic_time();
         this._info = d;
         this._apply(d.state, d.level || 0, d.text || '', !!d.busy);
+        this._updateNoiseMeter();
     }
 
     _readModels() {
@@ -904,7 +905,7 @@ export default class VoiceTypingOverlay extends Extension {
 
         // models for the chosen device (scrolls if the screen is short)
         P.add_child(sect('Speech model'));
-        const mon = Main.layoutManager.primaryMonitor, maxH = Math.max(150, Math.min(520, Math.round((mon ? mon.height : 720) - 470)));
+        const mon = Main.layoutManager.primaryMonitor, maxH = Math.max(150, Math.min(520, Math.round((mon ? mon.height : 720) - 470 - 330)));
         const scroll = new St.ScrollView({style: `max-height: ${maxH}px;`, overlay_scrollbars: true,
             hscrollbar_policy: St.PolicyType.NEVER, vscrollbar_policy: St.PolicyType.AUTOMATIC, x_expand: true});
         const list = new St.BoxLayout({orientation: Clutter.Orientation.VERTICAL, x_expand: true, style: 'spacing: 2px;'});
@@ -975,6 +976,8 @@ export default class VoiceTypingOverlay extends Extension {
         }, () => { this._sel.sounds = !this._sel.sounds; this._buildPanel(); });
         dim(sw); P.add_child(sw); this._soundRow = sw;
 
+        P.add_child(this._noiseSectionSafe(sect, dim));
+
         // footer: status (spinner / ready / error) + Save
         const foot = new St.BoxLayout({style: 'padding-top: 14px; spacing: 10px;'});
         this._panelSpin = this._mkSpinner(18);
@@ -984,8 +987,154 @@ export default class VoiceTypingOverlay extends Extension {
         foot.add_child(stat);
         this._buildSave(); foot.add_child(this._saveBtn);
         P.add_child(foot);
+        P.add_child(this._uninstallSection());
         this._updatePanelStatus(); this._ensureSpin();
         if (this._panel.visible) { this._placePanel(); this._geomSoon(); }
+    }
+
+    // ---------- background noise + uninstall (own section builders; each is wrapped so a failure here can never break the rest of the panel) ----------
+    _noiseSectionSafe(sect, dim) {
+        const box = new St.BoxLayout({orientation: Clutter.Orientation.VERTICAL, x_expand: true});
+        try { box.add_child(sect('Background noise')); box.add_child(this._noiseSection(dim)); }
+        catch (e) { console.error('voice-typing noise section: ' + e); }
+        return box;
+    }
+    _noiseSet(payload) {   // noise settings apply at once (no Save): optimistic local update, then the daemon confirms through models.json
+        const s = this._models && this._models.settings; if (!s) return;
+        Object.assign(s, payload); this._cli(['--apply', JSON.stringify(payload)]); this._buildPanel();
+    }
+    _noiseSection(dim) {
+        const m = this._models, s = m.settings || {}, col = new St.BoxLayout({orientation: Clutter.Orientation.VERTICAL, x_expand: true, style: 'spacing: 6px; padding-top: 2px;'});
+        const rowStyle = (a, st) => { a.style = 'padding: 8px 10px; border-radius: 6px; spacing: 8px; border: 1px solid rgba(255,255,255,0.07); background-color: ' +
+                                    (st.down ? 'rgba(255,255,255,0.04)' : st.hover ? 'rgba(255,255,255,0.10)' : 'rgba(255,255,255,0.06)') + ';'; };
+        // 1. noise suppression on/off
+        const on = s.noise_suppression !== false, sw = new St.BoxLayout({x_expand: true});
+        const sname = lbl('Noise suppression', 10.5, '#fff'); sname.x_expand = true; sname.y_align = Clutter.ActorAlign.CENTER;
+        const track = new St.Bin({width: 40, height: 20, y_align: Clutter.ActorAlign.CENTER,
+            style: `border-radius: 10px; border: 1px solid ${on ? ACCENT : 'rgba(255,255,255,0.6)'}; background-color: ${on ? ACCENT : 'transparent'};`});
+        track.set_child(new St.Widget({width: 12, height: 12, y_align: Clutter.ActorAlign.CENTER, x_align: on ? Clutter.ActorAlign.END : Clutter.ActorAlign.START,
+            style: `border-radius: 6px; margin: 0 4px; background-color: ${on ? '#000' : 'rgba(255,255,255,0.8)'};`}));
+        sw.add_child(sname); sw.add_child(track);
+        this._interactive(sw, rowStyle, () => this._noiseSet({noise_suppression: !on}));
+        dim(sw); col.add_child(sw);
+        // 2. Auto / Manual noise floor
+        const modeRow = new St.BoxLayout({style: 'spacing: 6px;'}), mode = s.noise_mode === 'manual' ? 'manual' : 'auto';
+        const mt = lbl('Noise level', 10.5, '#fff'); mt.y_align = Clutter.ActorAlign.CENTER; mt.style += ' padding-right: 6px;'; modeRow.add_child(mt);
+        for (const [v, t] of [['auto', 'Auto'], ['manual', 'Manual']]) {
+            const sel = mode === v, chip = new St.Bin({child: lbl(t, 10.5, sel ? '#000' : '#fff')});
+            this._interactive(chip, (a, st) => {
+                a.style = 'padding: 5px 14px; border-radius: 15px; border: 1px solid ' + (sel ? 'transparent' : 'rgba(255,255,255,0.07)') + '; background-color: ' +
+                          (sel ? (st.down ? '#35a9e0' : st.hover ? '#6acfff' : ACCENT) : st.down ? 'rgba(255,255,255,0.05)' : st.hover ? 'rgba(255,255,255,0.14)' : 'rgba(255,255,255,0.07)') + ';';
+            }, () => this._noiseSet({noise_mode: v}));
+            dim(chip); modeRow.add_child(chip);
+        }
+        col.add_child(modeRow);
+        // 3. sensitivity
+        const sens = Math.max(0, Math.min(1, typeof s.silence_threshold === 'number' ? s.silence_threshold : 0.5));
+        const sensRow = new St.BoxLayout({x_expand: true, style: 'spacing: 10px;'});
+        const sl = lbl('Sensitivity', 10.5, '#fff'); sl.y_align = Clutter.ActorAlign.CENTER; sensRow.add_child(sl);
+        if (this._SliderCls === undefined) {
+            this._SliderCls = null;
+            import('resource:///org/gnome/shell/ui/slider.js').then(mod => { this._SliderCls = mod.Slider || false; if (this._panelOpen && this._panel) this._buildPanel(); })
+                .catch(() => { this._SliderCls = false; if (this._panelOpen && this._panel) this._buildPanel(); });
+        }
+        if (this._SliderCls) {
+            const slider = new this._SliderCls(sens); slider.x_expand = true; slider.y_align = Clutter.ActorAlign.CENTER; slider.reactive = true; slider.can_focus = false;
+            const val = lbl(Math.round(sens * 100) + '%', 10, SEC); val.y_align = Clutter.ActorAlign.CENTER; val.width = 40;
+            slider.connect('notify::value', () => { val.text = Math.round(slider.value * 100) + '%'; });
+            slider.connect('drag-end', () => this._noiseSet({silence_threshold: Math.round(slider.value * 100) / 100}));
+            sensRow.add_child(slider); sensRow.add_child(val);
+        } else if (this._SliderCls === false) {   // slider widget unavailable: three steps instead
+            for (const [v, t] of [[0.25, 'Low'], [0.5, 'Medium'], [0.75, 'High']]) {
+                const sel = Math.abs(sens - v) < 0.13, chip = new St.Bin({child: lbl(t, 10.5, sel ? '#000' : '#fff')});
+                this._interactive(chip, (a, st) => { a.style = 'padding: 5px 14px; border-radius: 15px; background-color: ' + (sel ? ACCENT : st.hover ? 'rgba(255,255,255,0.14)' : 'rgba(255,255,255,0.07)') + ';'; },
+                                  () => this._noiseSet({silence_threshold: v}));
+                sensRow.add_child(chip);
+            }
+        } else sensRow.add_child(lbl('…', 10, SEC));
+        dim(sensRow); col.add_child(sensRow);
+        col.add_child(wrapLbl(lbl('Higher picks up quieter speech. Lower ignores more background noise.', 9, SEC)));
+        // 4. live level bar + Calibrate
+        const W = 230, bar = new St.Widget({width: W, height: 10, y_align: Clutter.ActorAlign.CENTER, style: 'border-radius: 5px; background-color: rgba(255,255,255,0.10);'});
+        this._nzFill = new St.Widget({width: 0, height: 10, style: `border-radius: 5px; background-color: ${ACCENT};`});
+        this._nzFloor = new St.Widget({width: 2, height: 14, y: -2, x: 0, style: 'background-color: rgba(255,214,102,0.95);'});
+        bar.add_child(this._nzFill); bar.add_child(this._nzFloor); this._nzW = W;
+        const meterRow = new St.BoxLayout({x_expand: true, style: 'spacing: 10px; padding-top: 2px;'});
+        const ml = lbl('Level', 10.5, '#fff'); ml.y_align = Clutter.ActorAlign.CENTER; meterRow.add_child(ml); meterRow.add_child(bar);
+        const cal = new St.Bin({x_expand: true, x_align: Clutter.ActorAlign.END, child: lbl('Calibrate', 10.5, '#fff')});
+        const calOk = () => !this._isLoading() && !(this._info && (this._info.state === 'listening' || this._info.calib === 'running'));
+        this._interactive(cal, (a, st) => {
+            a.style = 'padding: 5px 14px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.10); background-color: ' +
+                      (!st.enabled ? 'rgba(255,255,255,0.04)' : st.down ? 'rgba(255,255,255,0.05)' : st.hover ? 'rgba(255,255,255,0.16)' : 'rgba(255,255,255,0.09)') + ';';
+            a.opacity = st.enabled ? 255 : 110;
+        }, () => this._noiseCalibrate(), calOk);
+        meterRow.add_child(cal); col.add_child(meterRow);
+        this._nzNote = wrapLbl(lbl('', 9, SEC)); col.add_child(this._nzNote);
+        this._updateNoiseMeter();
+        if (!this._nzTimer) {   // keep the daemon's mic meter alive while the panel is open (it runs ~6 s per poke and only while not listening)
+            this._noiseTick();
+            this._nzTimer = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 3, () => {
+                if (!this._panel || !this._panelOpen) { this._nzTimer = 0; return GLib.SOURCE_REMOVE; }
+                this._noiseTick(); return GLib.SOURCE_CONTINUE;
+            });
+        }
+        return col;
+    }
+    _noiseTick() { if (!this._info || this._info.state !== 'listening') this._cli(['meter']); }
+    _noiseCalibrate() {
+        this._info = Object.assign({}, this._info, {calib: 'running'}); this._cli(['calibrate']); this._updateNoiseMeter();
+        if (this._saveBtn && this._saveBtn._upd) this._saveBtn._upd();
+    }
+    _updateNoiseMeter() {   // called from the state.json reader (~10x per second while the daemon is metering or listening)
+        if (!this._nzFill || !this._panelOpen) return;
+        try {
+            const i = this._info || {}, s = (this._models && this._models.settings) || {}, mic = Math.max(0, Math.min(1, i.mic || 0)), fl = Math.max(0, Math.min(1, i.floor_lv || 0));
+            this._nzFill.width = Math.round(mic * this._nzW);
+            this._nzFill.style = `border-radius: 5px; background-color: ${i.speech ? '#6ccb5f' : ACCENT};`;
+            this._nzFloor.x = Math.max(0, Math.round(fl * this._nzW) - 1); this._nzFloor.visible = fl > 0;
+            const db = v => Math.round(20 * Math.log10(Math.max(v, 1) / 32768));
+            let t = '';
+            if (i.calib === 'running') t = 'Measuring the room… stay quiet for 2 seconds.';
+            else if (i.calib === 'error') t = 'Could not measure: no microphone audio.';
+            else if (s.noise_floor > 0) t = `Calibrated room noise: ${db(s.noise_floor_raw || s.noise_floor)} dB` + (s.noise_suppression !== false ? ` (${db(s.noise_floor)} dB after suppression)` : '') + (s.noise_mode === 'manual' ? '.' : '. Used in Manual mode.');
+            else t = s.noise_mode === 'manual' ? 'Manual mode needs a measurement: press Calibrate in a quiet moment.' : 'The yellow mark is the noise floor the app is tracking.';
+            this._nzNote.text = t;
+        } catch (e) {}
+    }
+
+    _uninstallSection() {
+        const box = new St.BoxLayout({orientation: Clutter.Orientation.VERTICAL, x_expand: true, style: 'spacing: 8px; padding-top: 14px;'});
+        try {
+            box.add_child(new St.Widget({x_expand: true, height: 1, style: 'background-color: rgba(255,255,255,0.07);'}));
+            if (!this._unConfirm) {
+                const b = new St.Bin({x_expand: true, child: lbl('Uninstall Voice Typing', 10.5, '#fff', 'bold')}); b.child.x_align = Clutter.ActorAlign.CENTER;
+                this._interactive(b, (a, st) => { a.style = 'padding: 7px 14px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.12); background-color: ' + (st.down ? CLOSE_RED_DOWN : st.hover ? '#e5484d' : CLOSE_RED) + ';'; },
+                                  () => { this._unConfirm = true; this._buildPanel(); });
+                box.add_child(b);
+            } else {
+                box.add_child(wrapLbl(lbl('Remove Voice Typing and all its models and settings?', 11, '#fff', 'bold')));
+                const row = new St.BoxLayout({x_expand: true, style: 'spacing: 10px;'});
+                const mk = (text, danger, fn) => {
+                    const b = new St.Bin({x_expand: true, child: lbl(text, 10.5, '#fff', danger ? 'bold' : null)}); b.child.x_align = Clutter.ActorAlign.CENTER;
+                    this._interactive(b, (a, st) => { a.style = 'padding: 7px 14px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.12); background-color: ' +
+                        (danger ? (st.down ? CLOSE_RED_DOWN : st.hover ? '#e5484d' : CLOSE_RED) : (st.down ? 'rgba(255,255,255,0.05)' : st.hover ? 'rgba(255,255,255,0.16)' : 'rgba(255,255,255,0.09)')) + ';'; }, fn);
+                    return b;
+                };
+                row.add_child(mk('Cancel', false, () => { this._unConfirm = false; this._buildPanel(); }));
+                row.add_child(mk('Remove', true, () => this._runUninstall()));
+                box.add_child(row);
+            }
+        } catch (e) { console.error('voice-typing uninstall section: ' + e); }
+        return box;
+    }
+    _runUninstall() {   // runs the installed uninstall.sh fully detached (own session, from a temp copy), so it survives the extension and the daemon being removed
+        this._unConfirm = false;
+        try {
+            const cli = this._models && this._models.cli; if (!cli) return;
+            const script = GLib.path_get_dirname(GLib.path_get_dirname(cli)) + '/uninstall.sh';
+            GLib.spawn_async(null, ['setsid', '-f', script, '--yes', '--pkexec'], null, GLib.SpawnFlags.SEARCH_PATH, null);
+        } catch (e) { console.error('voice-typing uninstall: ' + e); }
+        this._closePanel();
     }
 
     // Save button: dimmed (nothing to save / loading) -> normal -> hover -> pressed -> "Saved" (check) -> dimmed

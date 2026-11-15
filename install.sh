@@ -129,9 +129,9 @@ esac
 step "2/10 System packages"
 # package lists per distro: RUNTIME always; BUILD only for the GPU engine
 case "$PM" in
-  dnf)    RUNTIME="python3 python3-gobject at-spi2-core pipewire-utils pulseaudio-utils wl-clipboard ydotool"; BUILD="git cmake gcc-c++ make ninja-build glslc vulkan-headers vulkan-loader-devel spirv-headers-devel"; GPUPKG="vulkan-tools mesa-vulkan-drivers"; PQ='rpm -q --quiet';;
+  dnf)    RUNTIME="python3 python3-gobject at-spi2-core pipewire-utils pulseaudio-utils wl-clipboard ydotool rnnoise"; BUILD="git cmake gcc-c++ make ninja-build glslc vulkan-headers vulkan-loader-devel spirv-headers-devel"; GPUPKG="vulkan-tools mesa-vulkan-drivers"; PQ='rpm -q --quiet';;
   apt)    RUNTIME="python3 python3-venv python3-gi gir1.2-atspi-2.0 pipewire-bin pulseaudio-utils wl-clipboard ydotool"; BUILD="git cmake g++ make ninja-build libvulkan-dev glslc spirv-headers"; GPUPKG="vulkan-tools mesa-vulkan-drivers"; PQ='dpkg -s';;
-  pacman) RUNTIME="python python-gobject at-spi2-core pipewire libpulse wl-clipboard ydotool"; BUILD="git cmake gcc make ninja vulkan-headers vulkan-icd-loader spirv-headers shaderc"; GPUPKG="vulkan-tools"; PQ='pacman -Qi';;
+  pacman) RUNTIME="python python-gobject at-spi2-core pipewire libpulse wl-clipboard ydotool rnnoise"; BUILD="git cmake gcc make ninja vulkan-headers vulkan-icd-loader spirv-headers shaderc"; GPUPKG="vulkan-tools"; PQ='pacman -Qi';;
   *) RUNTIME=""; BUILD=""; GPUPKG=""; PQ=true;;
 esac
 # ydotool 1.x is required (--socket-path). Some distros still ship 0.1.x (Ubuntu 24.04, Debian 12): then it is built from source instead.
@@ -367,6 +367,26 @@ NoDisplay=true
 X-GNOME-Autostart-enabled=true
 EOT
   state_set autostart "\"$AUTOSTART\""; ok "Autostart entry: $AUTOSTART"
+fi
+# app-grid launcher ("Voice Typing" in Activities): same as pressing the shortcut
+LAUNCHER="${XDG_DATA_HOME:-$HOME/.local/share}/applications/$APP.desktop"
+if [ "$DRY" = 1 ]; then dry "write $LAUNCHER (Voice Typing in the app grid)"
+else
+  mkdir -p "$(dirname "$LAUNCHER")"
+  cat > "$LAUNCHER" <<EOT
+[Desktop Entry]
+Type=Application
+Name=Voice Typing
+GenericName=Offline dictation
+Comment=Dictate into any window, offline. Press again to pause or resume.
+Exec=$DATA/bin/voice-typing toggle
+Icon=audio-input-microphone
+Terminal=false
+Categories=Utility;Accessibility;
+Keywords=dictation;voice;speech;typing;microphone;
+StartupNotify=false
+EOT
+  command -v update-desktop-database >/dev/null && update-desktop-database "$(dirname "$LAUNCHER")" 2>/dev/null; ok "App launcher: $LAUNCHER"
 fi
 if [ "$NO_START" = 0 ] && [ "$DRY" = 0 ]; then
   if "$DATA/bin/voice-typing" status 2>/dev/null | grep -q '"state": "stopped"'; then

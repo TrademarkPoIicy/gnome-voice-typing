@@ -40,10 +40,10 @@ grep -q mic "$XDG_CONFIG_HOME/gnome-voice-typing/config.json" && ! grep -q 'alsa
 [ -f "$XDG_DATA_HOME/gnome-shell/extensions/$UUID/extension.js" ]; chk "extension files installed" $?
 python3 -c "import json,sys; m=json.load(open('$XDG_DATA_HOME/gnome-shell/extensions/$UUID/metadata.json')); sys.exit(0 if m['uuid']=='$UUID' and '51' in m['shell-version'] else 1)"; chk "metadata.json uuid + shell-version ok" $?
 [ -f "$XDG_CONFIG_HOME/autostart/gnome-voice-typing.desktop" ] && grep -q "$D/bin/voice-typingd" "$XDG_CONFIG_HOME/autostart/gnome-voice-typing.desktop"; chk "autostart entry written" $?
-[ "$(gsettings get org.gnome.desktop.wm.keybindings minimize)" = "@as []" ]; chk "conflicting minimize shortcut (Super+H) cleared" $?
+[ "$(gsettings get org.gnome.desktop.wm.keybindings minimize)" = "['<Super><Shift>h']" ]; chk "conflicting minimize shortcut moved from Super+H to Super+Shift+H" $?
 S=/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/gnome-voice-typing/
 [ "$(gsettings get org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:$S binding)" = "'<Super>h'" ]; chk "custom shortcut Super+H created" $?
-[ "$(gsettings get org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:$S command)" = "'$D/bin/voice-typing'" ]; chk "shortcut runs the installed voice-typing" $?
+[ "$(gsettings get org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:$S command)" = "'$HOME/.local/bin/voice-typing toggle'" ]; chk "shortcut runs the installed voice-typing toggle" $?
 [ "$(gsettings get org.gnome.desktop.interface toolkit-accessibility)" = true ]; chk "toolkit-accessibility enabled" $?
 gsettings get org.gnome.shell enabled-extensions | grep -q "$UUID"; chk "extension listed in enabled-extensions" $?
 grep -rIlE '/mnt/nvme|w3tsu1t|dictate-test|HyperX|QuadCast' "$D" "$XDG_DATA_HOME/gnome-shell" "$XDG_CONFIG_HOME" 2>/dev/null | grep -v '/venv/' | head -3 | grep . >/dev/null; [ $? -ne 0 ]; chk "no hardcoded personal paths/names in installed files" $?
@@ -51,7 +51,7 @@ grep -rIlE '/mnt/nvme|w3tsu1t|dictate-test|HyperX|QuadCast' "$D" "$XDG_DATA_HOME
 echo; echo "== 3. re-run install.sh (idempotent)"
 "$SRC/install.sh" --yes --cpu-only --no-system-deps --no-udev --no-start --model "$MODEL" > "$T/install2.log" 2>&1; chk "second install exits 0" $?
 grep -q "already set up" "$T/install2.log" && grep -q "already installed: $MODEL" "$T/install2.log"; chk "second run reuses venv and verified model" $?
-python3 -c "import json; l=json.load(open('$XDG_CONFIG_HOME/../.local/share/gnome-voice-typing/install-state.json'))['gnome']; assert l['conflicts'][0]['old'] is None and l['enabled_extensions_old'] is None"; chk "saved originals were not overwritten by the second run" $?
+python3 -c "import json; l=json.load(open('$XDG_CONFIG_HOME/../.local/share/gnome-voice-typing/install-state.json'))['gnome']; c=l['conflicts'][0]; assert c['old_user'] is None and '<Super>h' in c['old'] and '<Shift>' not in c['old'] and l['enabled_extensions_old'] is None"; chk "saved originals were not overwritten by the second run" $?
 [ "$(gsettings get org.gnome.settings-daemon.plugins.media-keys custom-keybindings | grep -o gnome-voice-typing | wc -l)" = 1 ]; chk "shortcut registered exactly once" $?
 
 echo; echo "== 4. daemon + CLI"
@@ -64,9 +64,9 @@ grep -q "model ready" "$XDG_STATE_HOME/gnome-voice-typing/daemon.log"; chk "daem
 "$D/bin/voice-typing" --models | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(0 if d['current']=='$MODEL' and any(m['installed'] for m in d['models']) else 1)"; chk "CLI --models lists the installed model" $?
 cp "$SRC/tests/data/sample.wav" "$T/sample.wav" 2>/dev/null
 if [ -f "$T/sample.wav" ] && command -v ffmpeg >/dev/null; then
-  "$D/bin/voice-typing" testwav "$T/sample.wav" > /dev/null; for i in $(seq 1 40); do grep -q "would type" "$XDG_STATE_HOME/gnome-voice-typing/daemon.log" && break; sleep 0.5; done
+  "$D/bin/voice-typing" testwav "$T/sample.wav" > /dev/null; for i in $(seq 1 60); do grep -qi "what your country can do" "$XDG_STATE_HOME/gnome-voice-typing/daemon.log" && "$D/bin/voice-typing" status | grep -q '"state": "idle"' && break; sleep 0.5; done   # streaming types the first words early: wait for the whole sample
   grep -i "would type" "$XDG_STATE_HOME/gnome-voice-typing/daemon.log" | head -2
-  grep -qi "ask not what your country" "$XDG_STATE_HOME/gnome-voice-typing/daemon.log"; chk "daemon transcribed the sample speech (dry-run: nothing typed)" $?
+  grep -qi "what your country can do" "$XDG_STATE_HOME/gnome-voice-typing/daemon.log"; chk "daemon transcribed the sample speech (dry-run: nothing typed)" $?
 else echo "SKIP  transcription test (no tests/data/sample.wav or ffmpeg)"; fi
 "$D/bin/voice-typing" toggle >/dev/null; sleep 1; "$D/bin/voice-typing" status | grep -q listening; chk "toggle -> listening" $?
 "$D/bin/voice-typing" close >/dev/null; sleep 0.5; "$D/bin/voice-typing" status | grep -q idle; chk "close -> idle" $?

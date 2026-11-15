@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.3 - 2026-11-15
+
+Brings the changes that were only on one machine into the repository, so every install is the same version.
+
+- **Uninstall Voice Typing** button in Settings (with a confirm). It removes the app, its models and settings, and asks once for the administrator password (graphical prompt) to remove the udev rule; if that prompt is declined everything else is still removed. `uninstall.sh --pkexec` does the same from the command line; started from the panel it runs from a temporary copy and logs to `/tmp/gnome-voice-typing-uninstall.log`.
+- **Noise suppression** (RNNoise, else GTCRN through sherpa-onnx) before voice detection and recognition, plus a streaming Silero voice-activity detector and an adaptive noise floor (`src/bin/audiofx.py`). Settings: Noise suppression on/off, Background noise Auto or Manual with **Calibrate**, Sensitivity, and a live Noise level meter (the yellow mark is the tracked noise floor). New commands `voice-typing calibrate` and `voice-typing meter`.
+- **Type while you talk** (`streaming`: auto / true / false; `stream_interval`): partial results are typed as you speak whenever the model keeps up, otherwise each phrase is typed at the end.
+- **App-grid launcher**: "Voice Typing" in Activities, same as pressing the shortcut. Removed by the uninstaller.
+- Shortcut conflicts: a shortcut already on `Super+H` is moved to `Super+Shift+H` (when free) instead of deleted, and its exact old value is restored on uninstall. Shortcuts kept by other extensions in their own settings are checked too.
+- Installer: `rnnoise` added to the runtime packages on Fedora and Arch (optional; without it the GTCRN fallback or no suppression is used).
+
 ## 0.1.2 - 2026-11-15
 
 - **First-launch prompt for missing system packages** ([#1](https://github.com/TrademarkPoIicy/gnome-voice-typing/issues/1)). If the install skipped the distro packages (for example `--no-system-deps`, or no sudo at install time), the first time the bar opens the settings panel shows which packages are missing for the graphics-card engine (cmake, glslc, Vulkan / SPIR-V headers, ...) and for typing (ydotool). It explains that the processor (CPU) engine works without them, but the graphics-card version can't be built or used until they're installed.

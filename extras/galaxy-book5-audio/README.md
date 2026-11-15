@@ -1,5 +1,10 @@
 # Extra: Samsung Galaxy Book5 Pro 360 speaker fix (Fedora)
 
+> **This extra now lives in its own repository, which is the maintained version:
+> [TrademarkPoIicy/galaxy-book-fedora-audio](https://github.com/TrademarkPoIicy/galaxy-book-fedora-audio)** - a one-command, tag-pinned installer
+> (`curl -fsSL https://raw.githubusercontent.com/TrademarkPoIicy/galaxy-book-fedora-audio/v1.0.0/install.sh | bash`), release tarball with checksum, and an
+> uninstall one-liner. Use that one. The copy in this folder is kept for reference and will not be updated.
+
 This is an **optional extra** and has nothing to do with dictation. It is here because the same person runs both on
 the same laptop. It is **not** installed by the main `install.sh`, and on any computer that is not this laptop it
 refuses to do anything.

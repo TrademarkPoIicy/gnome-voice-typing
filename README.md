@@ -167,6 +167,8 @@ preset). It checks the hardware first and does nothing on any other computer. Bu
 [Andycodeman/samsung-galaxy-book-linux-fixes](https://github.com/Andycodeman/samsung-galaxy-book-linux-fixes) (GPL-2.0, downloaded at a pinned,
 checksum-verified commit, not bundled).
 
+**Maintained in its own repository: [TrademarkPoIicy/galaxy-book-fedora-audio](https://github.com/TrademarkPoIicy/galaxy-book-fedora-audio)** (one-command install, release v1.0.0).
+
 ## Attribution
 
 gnome-voice-typing is MIT licensed (see `LICENSE`), copyright (c) 2026 Jesse Fisher. It uses, downloads or builds:

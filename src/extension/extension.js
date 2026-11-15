@@ -307,16 +307,20 @@ export default class VoiceTypingOverlay extends Extension {
             return box;
         }
         if (d.dismissed && !busy && job !== 'failed') {     // compact reminder
-            const r = row(); const t = note(`Graphics-card setup: ${d.missing.length} package${d.missing.length === 1 ? '' : 's'} missing`, SEC); t.x_expand = true; t.y_align = Clutter.ActorAlign.CENTER;
+            const n = d.total ?? d.missing.length;
+            const r = row(); const t = note(`Setup: ${n} optional package${n === 1 ? '' : 's'} missing`, SEC); t.x_expand = true; t.y_align = Clutter.ActorAlign.CENTER;
             r.add_child(t); r.add_child(this._pill('Set up', 'primary', () => { this._deps.dismissed = false; this._spawnTool(['deps', 'undismiss']); this._buildPanel(); }));
             box.style = 'margin-top: 6px; padding: 2px 2px;'; box.add_child(r); return box;
         }
         const gpuMissing = d.missing_gpu.length > 0, typMissing = d.missing_typing.length > 0;
-        box.add_child(lbl(gpuMissing || (!d.engine_built && d.gpu !== false) ? 'Graphics-card setup needed' : 'One package missing for typing', 11, '#ffb84d', 'bold'));
+        const noiseMissing = (d.missing_noise || []).length > 0, pipMissing = (d.missing_pip || []).length > 0;
+        box.add_child(lbl(gpuMissing || (!d.engine_built && d.gpu !== false) ? 'Graphics-card setup needed' : 'Some packages are missing', 11, '#ffb84d', 'bold'));
         if (gpuMissing) box.add_child(note('The graphics-card engine needs these system packages, and they are not installed: ' + d.missing_gpu.join(', ') + '. ' +
             'The processor (CPU) engine works fine without them, but the graphics-card version can\'t be built or used until they are installed.'));
         else if (!d.engine_built && d.gpu !== false && !d.missing.length) box.add_child(note('All packages are here; the graphics-card engine just has to be built (a few minutes). The processor engine keeps working meanwhile.'));
         if (typMissing) box.add_child(note('Also missing: ' + d.missing_typing.join(', ') + '. Without it, GNOME asks for remote-control permission before typing.'));
+        if (noiseMissing) box.add_child(note('Noise suppression: ' + d.missing_noise.join(', ') + ' is not installed. Dictation works without it, but background noise is not filtered out.'));
+        if (pipMissing) box.add_child(note('Better voice detection: ' + d.missing_pip.join(', ') + ' (Python packages for the app, no password needed). Without them a simpler loudness-based detector is used.'));
         if (busy) {
             const r = row(); const sp = this._mkSpinner(14); r.add_child(sp); if (!this._spinId) this._spinId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 60, () => this._spinTick());
             const t = note(d.job.msg || 'Working…', '#fff'); t.x_expand = true; t.y_align = Clutter.ActorAlign.CENTER; r.add_child(t); box.add_child(r);
@@ -332,6 +336,7 @@ export default class VoiceTypingOverlay extends Extension {
         r.add_child(this._pill('Not now', 'plain', () => this._depsNotNow()));
         box.add_child(r);
         if (d.missing.length && d.pkexec) box.add_child(note('Install asks for your password, then runs: ' + d.command_text.replace(/^pkexec /, ''), 'rgba(255,255,255,0.55)', 8.5));
+        if (pipMissing) box.add_child(note('and downloads into the app: pip install ' + d.missing_pip.join(' '), 'rgba(255,255,255,0.55)', 8.5));
         return box;
     }
     _dlTickStart() { if (!this._dlTimer) this._dlTimer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 400, () => this._dlTick()); }

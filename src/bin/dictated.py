@@ -135,12 +135,14 @@ class Typer:
         self.yd = None; self.portal = None
     def ydotool_ready(self):
         if not os.access('/dev/uinput', os.W_OK): return False
+        if not (os.access(YDOTOOL, os.X_OK) and os.access(YDOTOOLD, os.X_OK)): return False     # ydotool not installed: use the portal instead of failing every phrase
         if self.yd and self.yd.poll() is None and os.path.exists(YSOCK): return True
         try: os.unlink(YSOCK)
         except Exception: pass
         env = dict(os.environ, YDOTOOL_SOCKET=YSOCK)
-        self.yd = subprocess.Popen([YDOTOOLD, '-p', YSOCK], env=env, start_new_session=True,
-                                   stdin=subprocess.DEVNULL, stdout=open(LOG, 'a'), stderr=subprocess.STDOUT)
+        try: self.yd = subprocess.Popen([YDOTOOLD, '-p', YSOCK], env=env, start_new_session=True,
+                                        stdin=subprocess.DEVNULL, stdout=open(LOG, 'a'), stderr=subprocess.STDOUT)
+        except OSError as e: log('ydotoold could not start (%r): using the portal' % e); return False
         for _ in range(60):
             if os.path.exists(YSOCK): return True
             time.sleep(0.05)

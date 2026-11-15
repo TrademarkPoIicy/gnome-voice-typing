@@ -435,19 +435,37 @@ def ydotool_ok():
         try: r = subprocess.run(['ydotoold', '--help'], capture_output=True, text=True, timeout=5); return '--socket-path' in (r.stdout + r.stderr)
         except Exception: return False
     return os.access(N + '/ext/bin/ydotoold', os.X_OK)
+def rnnoise_ok():
+    import ctypes
+    try: ctypes.CDLL('librnnoise.so.0'); return True
+    except OSError: return False
+def vad_pip_missing():
+    """Python packages for the Silero voice detector that aren't importable in the app's environment (empty = all there)"""
+    p = _sysdeps().get('pip', {}); mods = p.get('modules', []); pk = p.get('vad', [])
+    py = N + '/venv/bin/python'
+    if not os.path.exists(py): py = sys.executable
+    out = []
+    for m, k in zip(mods, pk):
+        try: ok = subprocess.run([py, '-c', 'import ' + m], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60).returncode == 0
+        except Exception: ok = False
+        if not ok: out.append(k)
+    return out
 def deps_status():
     pm = pkg_manager(); spec = _sysdeps().get(pm or '', {}); q = spec.get('query')
     gpu = vulkan_gpu(); built = engine_built()
     miss_gpu = [] if (built or gpu is False or not q) else [p for p in spec.get('gpu', []) if not _pkg_installed(q, p)]
     miss_typ = [] if (ydotool_ok() or not q) else [p for p in spec.get('typing', []) if not _pkg_installed(q, p)]
-    missing = sorted(set(miss_gpu + miss_typ))
+    miss_noise = [] if (rnnoise_ok() or not q) else [p for p in spec.get('noise', []) if not _pkg_installed(q, p)]
+    miss_pip = vad_pip_missing()
+    missing = sorted(set(miss_gpu + miss_typ + miss_noise))
     cmd = (['pkexec'] + spec['install'] + missing) if (missing and spec) else []
-    try: dismissed = json.load(open(DISMISS)).get('missing') == missing
+    try: dismissed = json.load(open(DISMISS)).get('missing') == missing + miss_pip
     except Exception: dismissed = False
     s = read_status(DEPS_ID)
-    return {'pm': pm, 'gpu': gpu, 'engine_built': built, 'missing_gpu': miss_gpu, 'missing_typing': miss_typ, 'missing': missing,
+    return {'pm': pm, 'gpu': gpu, 'engine_built': built, 'missing_gpu': miss_gpu, 'missing_typing': miss_typ, 'missing_noise': miss_noise, 'missing_pip': miss_pip,
+            'missing': missing, 'total': len(missing) + len(miss_pip),
             'pkexec': bool(shutil.which('pkexec')), 'command': cmd, 'command_text': ' '.join(cmd), 'manual': ('sudo ' + ' '.join(spec['install'] + missing)) if (missing and spec) else '',
-            'needed': bool(missing) or (gpu is not False and not built and not miss_gpu and bool(q)),
+            'needed': bool(missing) or bool(miss_pip) or (gpu is not False and not built and not miss_gpu and bool(q)),
             'dismissed': dismissed, 'job': s}
 def deps_install():
     """Installs the missing packages (pkexec = the desktop's password prompt), then builds the graphics-card engine
@@ -471,6 +489,17 @@ def deps_install():
             if p.returncode:
                 print(p.stdout[-1500:], file=sys.stderr)
                 raise Fail('Installing the packages failed. You can run it in a terminal to see why:  ' + d['manual'])
+        if d['missing_pip']:
+            st('installing', 'Downloading the voice-detection packages (%s)...' % ', '.join(d['missing_pip']))
+            py = N + '/venv/bin/python'; py = py if os.path.exists(py) else sys.executable
+            if subprocess.run([py, '-m', 'pip', '--version'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode:
+                subprocess.run([py, '-m', 'ensurepip'], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)    # uv-made environments have no pip
+            p = subprocess.run([py, '-m', 'pip', 'install', '--quiet', '--disable-pip-version-check'] + d['missing_pip'],
+                               stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            if p.returncode or vad_pip_missing():
+                print(p.stdout[-1500:], file=sys.stderr)
+                raise Fail("Couldn't download the voice-detection packages (%s). Check your internet connection and press Try again." % ', '.join(d['missing_pip']))
+        built_now = False
         if vulkan_gpu() is not False and not engine_built():
             missing_tools = engine_tools_missing()
             if missing_tools: raise Fail('Still missing after the install: %s. Run install.sh --gpu to finish.' % ', '.join(missing_tools))
@@ -484,6 +513,7 @@ def deps_install():
             if p.returncode or not engine_built():
                 print(out[-1500:], file=sys.stderr)
                 raise Fail("Couldn't build the graphics-card engine. The log is in ~/.cache/gnome-voice-typing/build/.")
+            built_now = True
             gm = 'parakeet-gpu'
             if gm in REG and model_state(gm) != 'installed':
                 st('installing', 'Downloading the graphics-card model...')
@@ -491,7 +521,7 @@ def deps_install():
                 if model_state(gm) != 'installed': raise Fail("The engine is built, but the graphics-card model didn't download. Use its Download button below.")
         try: os.unlink(DISMISS)
         except OSError: pass
-        st('done', 'All set. Pick a graphics-card model and press Save.')
+        st('done', 'All set. Pick a graphics-card model and press Save.' if built_now else 'All set. The new parts are used the next time dictation starts.')
         return 0
     except Cancelled:
         st('failed', 'Cancelled.'); return 1
@@ -505,7 +535,7 @@ def deps_dismiss(on=True):
         except OSError: pass
         return
     os.makedirs(os.path.dirname(DISMISS), exist_ok=True)
-    json.dump({'missing': deps_status()['missing'], 't': time.strftime('%F %T')}, open(DISMISS, 'w'))
+    d = deps_status(); json.dump({'missing': d['missing'] + d['missing_pip'], 't': time.strftime('%F %T')}, open(DISMISS, 'w'))
 
 # ---------------------------------------------------------------- reporting
 def entry_state(mid):
@@ -545,10 +575,12 @@ def main(a):
         d = deps_status()
         if '--json' in opts: print(json.dumps(d)); return 0
         print('graphics card (Vulkan): %s   engine built: %s   package manager: %s' % ({True: 'yes', False: 'no', None: 'unknown'}[d['gpu']], 'yes' if d['engine_built'] else 'no', d['pm'] or 'unsupported'))
-        if not d['missing']: print('nothing missing'); return 0
+        if not d['total']: print('nothing missing'); return 0
         print('missing for the graphics-card engine: %s' % (' '.join(d['missing_gpu']) or '-'))
         print('missing for typing (else GNOME asks for remote-control permission): %s' % (' '.join(d['missing_typing']) or '-'))
-        print('the CPU engine works without these. To install them:  %s' % d['manual']); return 0
+        print('missing for noise suppression (optional): %s' % (' '.join(d['missing_noise']) or '-'))
+        print('missing for better voice detection (optional, Python packages, no password needed): %s' % (' '.join(d['missing_pip']) or '-'))
+        print('dictation works without these. To install everything:  voice-typing-models deps install' + (('   (system packages: %s)' % d['manual']) if d['manual'] else '')); return 0
     unknown = [m for m in rest if m not in REG]
     if unknown: print('unknown model id(s): %s\nknown: %s' % (', '.join(unknown), ', '.join(REG)), file=sys.stderr); return 2
     dry = '--dry-run' in opts; force = '--force' in opts

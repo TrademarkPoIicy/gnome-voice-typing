@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.4
+
+- Typing works on machines without ydotool: if /dev/uinput is writable but ydotool isn't installed, the daemon now uses GNOME's typing portal instead of failing every phrase.
+- rnnoise (noise suppression) is listed with the other optional packages in the installer and the first-launch setup card, and installs with the same one click.
+- Optional Silero voice detection packages (onnxruntime, faster-whisper) are offered at install and in the setup card, installed into the app's Python environment (pip is bootstrapped if missing).
+
 ## 0.1.3 - 2026-11-15
 
 Brings the changes that were only on one machine into the repository, so every install is the same version.

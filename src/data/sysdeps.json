@@ -1,12 +1,13 @@
 {
-  "_comment": "System packages per package manager. 'gpu' = needed to build and run the graphics-card (Vulkan) engine, 'typing' = needed to type into other windows without GNOME's remote-control prompt. Keep in sync with install.sh (tests/sysdeps-test.sh checks this).",
+  "_comment": "System packages per package manager. 'gpu' = needed to build and run the graphics-card (Vulkan) engine, 'typing' = needed to type into other windows without GNOME's remote-control prompt, 'noise' = noise suppression (RNNoise; optional), 'pip' = Python packages installed into the app's own environment (no administrator rights) for the better voice detection (Silero VAD; optional). Keep in sync with install.sh (tests/sysdeps-test.sh checks this).",
   "dnf":    {"install": ["dnf", "install", "-y"],                 "query": ["rpm", "-q", "--quiet"],
              "gpu": ["git", "cmake", "gcc-c++", "make", "ninja-build", "glslc", "vulkan-headers", "vulkan-loader-devel", "spirv-headers-devel", "vulkan-tools", "mesa-vulkan-drivers"],
-             "typing": ["ydotool"]},
+             "typing": ["ydotool"], "noise": ["rnnoise"]},
   "apt":    {"install": ["apt-get", "install", "-y"],             "query": ["dpkg", "-s"],
              "gpu": ["git", "cmake", "g++", "make", "ninja-build", "libvulkan-dev", "glslc", "spirv-headers", "vulkan-tools", "mesa-vulkan-drivers"],
-             "typing": ["ydotool"]},
+             "typing": ["ydotool"], "noise": []},
   "pacman": {"install": ["pacman", "-S", "--needed", "--noconfirm"], "query": ["pacman", "-Qi"],
              "gpu": ["git", "cmake", "gcc", "make", "ninja", "vulkan-headers", "vulkan-icd-loader", "spirv-headers", "shaderc", "vulkan-tools"],
-             "typing": ["ydotool"]}
+             "typing": ["ydotool"], "noise": ["rnnoise"]},
+  "pip": {"vad": ["onnxruntime", "faster-whisper"], "modules": ["onnxruntime", "faster_whisper"]}
 }

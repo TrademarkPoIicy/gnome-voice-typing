@@ -152,6 +152,7 @@ if [ "$NO_SYSDEPS" = 1 ]; then
 elif [ -z "$MISSING" ]; then ok "All required packages are already installed."
 else
   echo "    Missing packages: $MISSING"
+  case " $MISSING " in *" rnnoise "*) echo "    (rnnoise is optional: it filters background noise out of the microphone. Dictation works without it.)";; esac
   echo "    These are installed with your distro's package manager. That needs administrator rights, so I will run:"
   case "$PM" in dnf) CMD="$SUDO dnf install -y $MISSING";; apt) CMD="$SUDO apt-get install -y $MISSING";; pacman) CMD="$SUDO pacman -S --needed --noconfirm $MISSING";; esac
   echo "      $CMD"
@@ -233,6 +234,22 @@ else
     fi; rm -rf "$TMPV"
   fi
   [ "$VENV_OK" = 1 ] || die "Could not create the Python environment. See the messages above."
+fi
+
+# optional: Silero voice detection (needs onnxruntime + faster-whisper, which ships the Silero model) - better than the loudness-based detector
+VADPKG="onnxruntime faster-whisper"
+if [ "$DRY" = 1 ]; then dry "optional: pip install $VADPKG   (better voice detection; asked first)"
+elif [ -x "$DATA/venv/bin/python" ]; then
+  if "$DATA/venv/bin/python" -c 'import onnxruntime, faster_whisper' 2>/dev/null; then ok "Voice detection packages already installed."
+  else
+    echo "    Optional: better voice detection (Silero) needs two Python packages: $VADPKG."
+    echo "    They go into the app's own Python environment (no administrator rights). Without them a simpler loudness-based detector is used."
+    if ask "Download them now?" y; then
+      "$DATA/venv/bin/python" -m pip --version >/dev/null 2>&1 || "$DATA/venv/bin/python" -m ensurepip --quiet >/dev/null 2>&1   # uv-made environments have no pip
+      if "$DATA/venv/bin/python" -m pip install --quiet --disable-pip-version-check $VADPKG && "$DATA/venv/bin/python" -c 'import onnxruntime, faster_whisper'; then ok "Voice detection packages installed."
+      else warn "Could not install them (continuing). Later: Settings shows an Install button, or run: voice-typing-models deps install"; fi
+    else say "Skipped. Settings offers them later (one click)."; fi
+  fi
 fi
 
 # ---------------------------------------------------------------- 5. GPU engine

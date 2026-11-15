@@ -19,10 +19,13 @@ for pm in ('dnf', 'apt', 'pacman'):
     runtime, build, gpupkg = (x.split() for x in line.groups())
     if set(d[pm]['gpu']) != set(build + gpupkg): bad.append('%s gpu: %s vs %s' % (pm, sorted(d[pm]['gpu']), sorted(build + gpupkg)))
     if not set(d[pm]['typing']) <= set(runtime): bad.append(pm + ' typing not in RUNTIME')
+    if not set(d[pm].get('noise', [])) <= set(runtime): bad.append(pm + ' noise not in RUNTIME')
+vad = re.search(r'^VADPKG="([^"]*)"', sh, re.M)
+if not vad or vad.group(1).split() != d['pip']['vad']: bad.append('pip vad list differs from VADPKG in install.sh')
 print('\n'.join(bad)); sys.exit(1 if bad else 0)
 PYE
 J="$("$PY" "$SRC/src/bin/models_tool.py" deps --json)"; chk "deps --json runs" $?
-echo "$J" | "$PY" -c 'import json,sys; d=json.load(sys.stdin); assert all(k in d for k in ("needed","missing","missing_gpu","missing_typing","command","manual","pkexec","gpu","engine_built","dismissed"))'; chk "deps --json has every field" $?
+echo "$J" | "$PY" -c 'import json,sys; d=json.load(sys.stdin); assert all(k in d for k in ("needed","missing","missing_gpu","missing_typing","command","manual","pkexec","gpu","engine_built","dismissed","missing_noise","missing_pip","total"))'; chk "deps --json has every field" $?
 echo "$J" | "$PY" -c 'import json,sys; d=json.load(sys.stdin); assert not d["missing"] or d["command"][0]=="pkexec"'; chk "install command goes through pkexec (never silent sudo)" $?
 "$PY" "$SRC/src/bin/models_tool.py" deps dismiss && "$PY" "$SRC/src/bin/models_tool.py" deps --json | "$PY" -c 'import json,sys; assert json.load(sys.stdin)["dismissed"]'; chk "Not now is remembered" $?
 "$PY" "$SRC/src/bin/models_tool.py" deps undismiss && "$PY" "$SRC/src/bin/models_tool.py" deps --json | "$PY" -c 'import json,sys; assert not json.load(sys.stdin)["dismissed"]'; chk "Set up brings the prompt back" $?

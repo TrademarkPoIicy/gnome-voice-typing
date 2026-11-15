@@ -11,6 +11,9 @@ The Settings panel runs this same tool (one-click Download / Uninstall); progres
   voice-typing-models verify [ID...]             re-check installed models against their SHA-256
   voice-typing-models adopt [ID...]              verify models downloaded by an older version and mark them installed
   voice-typing-models licenses
+  voice-typing-models deps [--json]              missing system packages for the graphics-card engine / typing (first-launch check)
+  voice-typing-models deps install               install them (graphical password prompt via pkexec), then build the engine
+  voice-typing-models deps dismiss|undismiss     "Not now" in the first-launch prompt / show it again
 
 A model counts as installed only when EVERY file listed in the registry exists with the right size AND a marker
 (models/.installed/<id>.json, written after the SHA-256 check) matches the registry. Downloads are staged in models/.dl/<id>/
@@ -399,6 +402,111 @@ def cancel(mid):
             except OSError: pass
     clear_status(mid); print('cancelled', mid); return 0
 
+# ---------------------------------------------------------------- system dependencies (first-launch check)
+# The graphics-card engine is compiled on this machine and needs distro packages (cmake, glslc, Vulkan headers, ...).
+# install.sh can skip them (--no-system-deps, no sudo); the app then runs on the CPU. `deps` tells the Settings panel
+# what is missing and `deps install` installs it with a normal graphical password prompt (pkexec), never silently.
+DEPS_ID = '_deps'
+XDG_CONFIG = os.environ.get('XDG_CONFIG_HOME') or os.path.expanduser('~/.config')
+DISMISS = XDG_CONFIG + '/gnome-voice-typing/deps-dismissed.json'
+def _sysdeps():
+    try: return json.load(open(N + '/data/sysdeps.json'))
+    except Exception: return {}
+def pkg_manager():
+    for pm, exe in (('dnf', 'dnf'), ('apt', 'apt-get'), ('pacman', 'pacman')):
+        if shutil.which(exe): return pm
+    return None
+def _pkg_installed(q, pkg):
+    try: return subprocess.run(q + [pkg], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20).returncode == 0
+    except Exception: return False
+def vulkan_gpu():
+    """True: a real Vulkan GPU (not llvmpipe). False: Vulkan works but only software. None: can't tell (vulkaninfo missing)."""
+    if os.environ.get('GVT_FAKE_GPU') in ('0', '1'): return os.environ['GVT_FAKE_GPU'] == '1'
+    if not shutil.which('vulkaninfo'): return None if glob_any('/dev/dri/renderD*') else False
+    try: out = subprocess.run(['vulkaninfo', '--summary'], capture_output=True, text=True, timeout=15).stdout
+    except Exception: return None
+    return any(t in out for t in ('PHYSICAL_DEVICE_TYPE_DISCRETE_GPU', 'PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU', 'PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU'))
+def glob_any(pat):
+    import glob
+    return bool(glob.glob(pat))
+def engine_built(): return os.path.exists(N + '/gpu/libasrshim.so')
+def ydotool_ok():
+    if shutil.which('ydotoold'):
+        try: r = subprocess.run(['ydotoold', '--help'], capture_output=True, text=True, timeout=5); return '--socket-path' in (r.stdout + r.stderr)
+        except Exception: return False
+    return os.access(N + '/ext/bin/ydotoold', os.X_OK)
+def deps_status():
+    pm = pkg_manager(); spec = _sysdeps().get(pm or '', {}); q = spec.get('query')
+    gpu = vulkan_gpu(); built = engine_built()
+    miss_gpu = [] if (built or gpu is False or not q) else [p for p in spec.get('gpu', []) if not _pkg_installed(q, p)]
+    miss_typ = [] if (ydotool_ok() or not q) else [p for p in spec.get('typing', []) if not _pkg_installed(q, p)]
+    missing = sorted(set(miss_gpu + miss_typ))
+    cmd = (['pkexec'] + spec['install'] + missing) if (missing and spec) else []
+    try: dismissed = json.load(open(DISMISS)).get('missing') == missing
+    except Exception: dismissed = False
+    s = read_status(DEPS_ID)
+    return {'pm': pm, 'gpu': gpu, 'engine_built': built, 'missing_gpu': miss_gpu, 'missing_typing': miss_typ, 'missing': missing,
+            'pkexec': bool(shutil.which('pkexec')), 'command': cmd, 'command_text': ' '.join(cmd), 'manual': ('sudo ' + ' '.join(spec['install'] + missing)) if (missing and spec) else '',
+            'needed': bool(missing) or (gpu is not False and not built and not miss_gpu and bool(q)),
+            'dismissed': dismissed, 'job': s}
+def deps_install():
+    """Installs the missing packages (pkexec = the desktop's password prompt), then builds the graphics-card engine
+    and downloads its default model. Progress goes to models/.status/_deps.json for the Settings panel."""
+    cur = read_status(DEPS_ID)
+    if cur and cur.get('status') in ACTIVE and cur.get('pid') != os.getpid() and _pid_is_ours(cur.get('pid', 0)):
+        raise SystemExit('already running (pid %s)' % cur['pid'])
+    signal.signal(signal.SIGTERM, _on_term)
+    def st(status, msg, **kw):
+        write_status(DEPS_ID, status=status, msg=msg, **kw)
+        print('  ' + msg, flush=True)
+    try:
+        d = deps_status()
+        if d['missing']:
+            if not d['pm']: raise Fail("Your distribution's package manager isn't supported. Install these yourself: " + ' '.join(d['missing']))
+            if not d['pkexec']: raise Fail('No graphical password prompt (pkexec) is available. Run this in a terminal instead:  ' + d['manual'])
+            st('installing', 'Waiting for your password, then installing %d package%s...' % (len(d['missing']), 's' if len(d['missing']) != 1 else ''))
+            if d['pm'] == 'apt': subprocess.run(['pkexec', 'apt-get', 'update'], stdin=subprocess.DEVNULL)
+            p = subprocess.run(d['command'], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            if p.returncode in (126, 127): raise Fail('The password prompt was cancelled, so nothing was installed. Press Install to try again.')
+            if p.returncode:
+                print(p.stdout[-1500:], file=sys.stderr)
+                raise Fail('Installing the packages failed. You can run it in a terminal to see why:  ' + d['manual'])
+        if vulkan_gpu() is not False and not engine_built():
+            missing_tools = engine_tools_missing()
+            if missing_tools: raise Fail('Still missing after the install: %s. Run install.sh --gpu to finish.' % ', '.join(missing_tools))
+            st('building', 'Building the graphics-card engine (a few minutes)...')
+            p = subprocess.Popen(['bash', N + '/scripts/build-gpu.sh', N], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, stdin=subprocess.DEVNULL, start_new_session=True)
+            try: out = p.communicate()[0]
+            except BaseException:
+                try: os.killpg(p.pid, signal.SIGTERM)
+                except OSError: pass
+                raise
+            if p.returncode or not engine_built():
+                print(out[-1500:], file=sys.stderr)
+                raise Fail("Couldn't build the graphics-card engine. The log is in ~/.cache/gnome-voice-typing/build/.")
+            gm = 'parakeet-gpu'
+            if gm in REG and model_state(gm) != 'installed':
+                st('installing', 'Downloading the graphics-card model...')
+                install(gm)
+                if model_state(gm) != 'installed': raise Fail("The engine is built, but the graphics-card model didn't download. Use its Download button below.")
+        try: os.unlink(DISMISS)
+        except OSError: pass
+        st('done', 'All set. Pick a graphics-card model and press Save.')
+        return 0
+    except Cancelled:
+        st('failed', 'Cancelled.'); return 1
+    except Fail as e:
+        st('failed', str(e)); return 1
+    except Exception as e:
+        st('failed', friendly(e)); return 1
+def deps_dismiss(on=True):
+    if not on:
+        try: os.unlink(DISMISS)
+        except OSError: pass
+        return
+    os.makedirs(os.path.dirname(DISMISS), exist_ok=True)
+    json.dump({'missing': deps_status()['missing'], 't': time.strftime('%F %T')}, open(DISMISS, 'w'))
+
 # ---------------------------------------------------------------- reporting
 def entry_state(mid):
     ms = model_state(mid); s = read_status(mid)
@@ -430,6 +538,17 @@ def main(a):
         if x.startswith('--'): opts[x] = True
         else: rest.append(x)
         i += 1
+    if cmd == 'deps':
+        sub = rest[0] if rest else 'status'
+        if sub == 'install': return deps_install()
+        if sub in ('dismiss', 'undismiss'): deps_dismiss(sub == 'dismiss'); return 0
+        d = deps_status()
+        if '--json' in opts: print(json.dumps(d)); return 0
+        print('graphics card (Vulkan): %s   engine built: %s   package manager: %s' % ({True: 'yes', False: 'no', None: 'unknown'}[d['gpu']], 'yes' if d['engine_built'] else 'no', d['pm'] or 'unsupported'))
+        if not d['missing']: print('nothing missing'); return 0
+        print('missing for the graphics-card engine: %s' % (' '.join(d['missing_gpu']) or '-'))
+        print('missing for typing (else GNOME asks for remote-control permission): %s' % (' '.join(d['missing_typing']) or '-'))
+        print('the CPU engine works without these. To install them:  %s' % d['manual']); return 0
     unknown = [m for m in rest if m not in REG]
     if unknown: print('unknown model id(s): %s\nknown: %s' % (', '.join(unknown), ', '.join(REG)), file=sys.stderr); return 2
     dry = '--dry-run' in opts; force = '--force' in opts

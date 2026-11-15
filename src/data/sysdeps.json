@@ -1,0 +1,12 @@
+{
+  "_comment": "System packages per package manager. 'gpu' = needed to build and run the graphics-card (Vulkan) engine, 'typing' = needed to type into other windows without GNOME's remote-control prompt. Keep in sync with install.sh (tests/sysdeps-test.sh checks this).",
+  "dnf":    {"install": ["dnf", "install", "-y"],                 "query": ["rpm", "-q", "--quiet"],
+             "gpu": ["git", "cmake", "gcc-c++", "make", "ninja-build", "glslc", "vulkan-headers", "vulkan-loader-devel", "spirv-headers-devel", "vulkan-tools", "mesa-vulkan-drivers"],
+             "typing": ["ydotool"]},
+  "apt":    {"install": ["apt-get", "install", "-y"],             "query": ["dpkg", "-s"],
+             "gpu": ["git", "cmake", "g++", "make", "ninja-build", "libvulkan-dev", "glslc", "spirv-headers", "vulkan-tools", "mesa-vulkan-drivers"],
+             "typing": ["ydotool"]},
+  "pacman": {"install": ["pacman", "-S", "--needed", "--noconfirm"], "query": ["pacman", "-Qi"],
+             "gpu": ["git", "cmake", "gcc", "make", "ninja", "vulkan-headers", "vulkan-icd-loader", "spirv-headers", "shaderc", "vulkan-tools"],
+             "typing": ["ydotool"]}
+}

@@ -100,6 +100,7 @@ shortcut conflicts, asks, then removes only that accelerator from that one setti
 - Command line: `voice-typing toggle | pause | resume | close | status | quit`, `voice-typing --models`,
   `voice-typing --model parakeet`, `voice-typing --apply '{"device":"cpu"}'`, `voice-typing --apply '{"sounds":false}'`.
   Model management: `voice-typing-models list | status | install ID | cancel ID | remove ID | verify | adopt`.
+  System packages: `voice-typing-models deps` shows what's missing for the graphics-card engine and typing; `voice-typing-models deps install` installs it (password prompt) and builds the engine. The settings panel offers the same on first launch.
 - Accented and non-English characters are typed through the clipboard (`Ctrl+V`, or `Ctrl+Shift+V` in terminals); your clipboard is
   restored afterwards. In pop-up boxes that refuse clipboard access, accents fall back to plain letters ("café" becomes "cafe").
 

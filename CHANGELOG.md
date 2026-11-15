@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.2 - 2026-11-15
+
+- **First-launch prompt for missing system packages** ([#1](https://github.com/TrademarkPoIicy/gnome-voice-typing/issues/1)). If the install skipped the distro packages (for example `--no-system-deps`, or no sudo at install time), the first time the bar opens the settings panel shows which packages are missing for the graphics-card engine (cmake, glslc, Vulkan / SPIR-V headers, ...) and for typing (ydotool). It explains that the processor (CPU) engine works without them, but the graphics-card version can't be built or used until they're installed.
+  - **Install** asks for your password with the desktop's normal prompt (`pkexec`), installs the packages with your package manager, builds the graphics-card engine, downloads its default model (Parakeet GPU), and selects it, so you only press Save. Progress and readable errors are shown in the panel. Nothing is ever run with sudo silently.
+  - **Not now** remembers the choice (until the set of missing packages changes), and a one-line "Graphics-card setup: N packages missing · Set up" stays in Settings so it can be done later.
+  - No Vulkan graphics card: the graphics-card packages are never asked for. No `pkexec`: the panel shows the exact command to paste in a terminal instead. A cancelled password prompt installs nothing and offers Try again.
+- `voice-typing-models deps [--json] | deps install | deps dismiss | deps undismiss`. Package lists live in `data/sysdeps.json`; `tests/sysdeps-test.sh` checks they match `install.sh`.
+- Needs one logout/login to load the updated extension.
+
 ## 0.1.1 - 2026-11-14
 
 - **One-click model installs.** Every model in the catalog is always listed in the settings panel. Not downloaded: a **Download · size** button. Downloading: progress bar and **Cancel**. Failed: a short reason and **Retry**. Installed: an **Uninstall** button with a confirm (the model in use can't be uninstalled; the panel says why). Downloads run in a separate helper process (never inside GNOME Shell) and report progress through `models/.status/<id>.json`.

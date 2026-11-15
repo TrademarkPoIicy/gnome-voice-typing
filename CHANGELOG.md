@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- New optional extra `extras/galaxy-book5-audio/`: Fedora speaker fix for the Samsung Galaxy Book5 Pro 360 (960QHA) - MAX98390 DKMS driver, boot services and a hidden EasyEffects preset. Hardware-checked (does nothing on other computers), `--dry-run`, `uninstall.sh`. Uses [Andycodeman/samsung-galaxy-book-linux-fixes](https://github.com/Andycodeman/samsung-galaxy-book-linux-fixes) (GPL-2.0) at commit `a6b13c5`, downloaded and checksum-verified at install time, not bundled. Not part of the dictation program.
+
 ## 0.1.0 - 2026-11-14
 
 First public release.

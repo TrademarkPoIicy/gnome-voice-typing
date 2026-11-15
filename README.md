@@ -159,6 +159,14 @@ all over HTTPS, with SHA-256 / commit-id verification. The program itself does n
 - Input into some pop-over entries can lose accented characters (see above).
 - The visual style of the bar is inspired by common desktop dictation bars; it is not affiliated with any other product.
 
+## Extra: Samsung Galaxy Book5 Pro 360 speaker fix (Fedora)
+
+Unrelated to dictation, and **not** installed by `install.sh`: [`extras/galaxy-book5-audio/`](extras/galaxy-book5-audio/) holds an optional
+installer that makes the built-in speakers of the Samsung Galaxy Book5 Pro 360 work on Fedora (MAX98390 amplifier driver plus an EasyEffects
+preset). It checks the hardware first and does nothing on any other computer. Built on
+[Andycodeman/samsung-galaxy-book-linux-fixes](https://github.com/Andycodeman/samsung-galaxy-book-linux-fixes) (GPL-2.0, downloaded at a pinned,
+checksum-verified commit, not bundled).
+
 ## Attribution
 
 gnome-voice-typing is MIT licensed (see `LICENSE`), copyright (c) 2026 Jesse Fisher. It uses, downloads or builds:

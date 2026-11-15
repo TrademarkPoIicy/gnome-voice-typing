@@ -3,10 +3,17 @@ States: idle (hidden) -> listening <-> paused -> idle(close). Controlled over a 
 import glob, os, sys, json, socket, threading, queue, time, subprocess, re, signal, datetime, collections, shutil
 import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import audiofx
 N = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 APP = 'gnome-voice-typing'
 CFG = {'backend': 'vk', 'model': 'parakeet-gpu', 'sounds': True, 'end_silence': 0.7, 'auto_pause_seconds': 60,
-       'auto_close_paused_seconds': 300, 'ydotool_key_delay_ms': 6}
+       'auto_close_paused_seconds': 300, 'ydotool_key_delay_ms': 6,
+       'streaming': 'auto',            # 'auto' (type while you talk whenever the model keeps up, adaptive pace) | true (always stream, never give up) | false (type at the end of each phrase)
+       'stream_interval': 0.4,         # fastest pace of partial passes in seconds; backs off automatically when a pass is slow
+       'noise_mode': 'auto',           # 'auto' = adaptive noise floor | 'manual' = use the calibrated room noise (noise_floor) as well
+       'silence_threshold': 0.5,       # speech sensitivity 0..1 (higher picks up quieter speech)
+       'noise_suppression': True,      # neural noise suppression (RNNoise, else GTCRN) before voice detection and speech recognition
+       'noise_floor': 0.0}             # set by 'voice-typing calibrate'
 XDG_CONFIG = os.environ.get('XDG_CONFIG_HOME') or os.path.expanduser('~/.config')
 XDG_STATE = os.environ.get('XDG_STATE_HOME') or os.path.expanduser('~/.local/state')
 CFGFILE = os.environ.get('GVT_CONFIG') or (XDG_CONFIG + '/' + APP + '/config.json')       # user settings (model, mic, pause time, ...)
@@ -229,6 +236,7 @@ def postprocess(text):
     t = re.sub(r'[,.]?\s*\bnew line\b[.,]?\s*', '\n', t, flags=re.I)
     return t
 
+HOLD_LAST = {'new'}                  # a trailing word that may become a voice command is held back while streaming
 HALLUC = {'you', 'thank you', 'thanks for watching', 'bye', 'the end', 'thanks', 'okay', 'so'}
 CMD_PAUSE = {'stop listening', 'pause dictation', 'pause listening', 'stop dictation', 'pause', 'stop voice typing'}
 CMD_CLOSE = {'close dictation', 'close voice typing', 'exit dictation', 'quit dictation'}
@@ -240,12 +248,20 @@ class Session:
         self.prefix = ''; self.enter = False; self.src = None; self.oneshot = False; self.dry = False
         self.__dict__.update(kw); self.first = True
 
+class Phrase:
+    """Streaming state of one phrase (utterance): words typed so far, last hypothesis, pacing of the partial passes."""
+    def __init__(self, sess):
+        self.sess = sess; self.words = []; self.words_n = []; self.chunks = []; self.prev_n = []
+        self.off = False; self.done = False; self.inflight = False; self.next_at = 0.0; self.last_n = 0
+        self.passes = 0; self.t_sum = 0.0; self.interval = 0.4
+
 class Daemon:
     def __init__(self):
         self.state = 'idle'; self.lock = threading.RLock(); self.stop = threading.Event()
         self.thread = None; self.q = queue.Queue(); self.pending = 0; self.asr = None; self.asr_err = None
         self.level = 0.0; self.err_until = 0; self.err_text = ''; self.paused_at = 0
         self.typer = Typer(); self.last_typed = ''; self.sess = None
+        self.partial = None; self.stream_block_until = 0; self.meter_until = 0; self.mon = None; self.rms = 0.0; self.floor = 0.0; self.calib = {'status': 'idle'}
         self.cur_id = CFG['model']; self.switch = {'status': 'idle', 'target': '', 'msg': ''}; self.switched_until = 0
         self.mseq = 0; self.dev_note = ''; self.set_extra_model(self.cur_id); self.write_models()
         threading.Thread(target=self.load_asr, daemon=True).start()
@@ -266,6 +282,8 @@ class Daemon:
         d = {'cli': N + '/bin/voice-typing', 'current': self.cur_id, 'current_name': self.name_of(self.cur_id),
              'models': [dict(e, device=dev_of(e)) for e in CATALOG if installed(e)], 'equiv': EQUIV, 'defaults': DEFAULTS, 'note': self.dev_note,
              'settings': {'auto_pause_seconds': CFG['auto_pause_seconds'], 'mic': CFG.get('mic', ''), 'sounds': bool(CFG.get('sounds', True)),
+                          'noise_mode': CFG.get('noise_mode', 'auto'), 'silence_threshold': CFG.get('silence_threshold', 0.5), 'noise_suppression': bool(CFG.get('noise_suppression', True)),
+                          'noise_floor': CFG.get('noise_floor', 0.0), 'noise_floor_raw': CFG.get('noise_floor_raw', 0.0), 'streaming': CFG.get('streaming', 'auto'),
                           'device': dev_of(cat_entry(self.cur_id)), 'mics': list_mics()},
              'switch': self.switch, 'seq': self.mseq}
         try:
@@ -278,6 +296,12 @@ class Daemon:
         if 'auto_pause_seconds' in msg: ch['auto_pause_seconds'] = int(msg['auto_pause_seconds'])
         if 'mic' in msg: ch['mic'] = str(msg['mic'])
         if 'sounds' in msg: ch['sounds'] = bool(msg['sounds'])
+        if msg.get('noise_mode') in ('auto', 'manual'): ch['noise_mode'] = msg['noise_mode']
+        if 'silence_threshold' in msg:
+            try: ch['silence_threshold'] = round(max(0.0, min(1.0, float(msg['silence_threshold']))), 2)
+            except Exception: pass
+        if 'noise_suppression' in msg: ch['noise_suppression'] = bool(msg['noise_suppression'])
+        if 'streaming' in msg: ch['streaming'] = msg['streaming'] if msg['streaming'] in (True, False, 'auto') else 'auto'
         mid = msg.get('model'); dev = msg.get('device')
         if dev in ('gpu', 'cpu') and not mid and dev_of(cat_entry(self.cur_id)) != dev:   # device only: equivalent model if there is one, else the device default
             eq = cat_entry(EQUIV.get(self.cur_id))
@@ -358,6 +382,8 @@ class Daemon:
         if c == 'models':
             self.write_models(); return json.dumps({'current': self.cur_id, 'models': [dict(e, installed=installed(e)) for e in CATALOG], 'switch': self.switch, 'settings': {'auto_pause_seconds': CFG['auto_pause_seconds'], 'mic': CFG.get('mic', ''), 'device': dev_of(cat_entry(self.cur_id))}})
         if c == 'apply': self.apply(msg); return json.dumps({'ok': True, 'switch': self.switch})
+        if c == 'calibrate': return json.dumps(self.calibrate())
+        if c == 'meter': self.meter(); return json.dumps({'state': self.state, 'rms': round(self.rms, 1), 'floor': round(self.floor, 1)})
         with self.lock:
             if c == 'toggle':
                 if self.state == 'idle': self.start(Session())
@@ -374,7 +400,12 @@ class Daemon:
                 try: os.unlink(SOCK)
                 except Exception: pass
                 os._exit(0)
-        return json.dumps({'state': self.state, 'asr': self.asr.name if self.asr else None, 'asr_err': self.asr_err})
+        r = {'state': self.state, 'asr': self.asr.name if self.asr else None, 'asr_err': self.asr_err}
+        if c == 'status':
+            r.update(level=round(self.level, 3), rms=round(self.rms, 1), floor=round(self.floor, 1), noise_mode=CFG.get('noise_mode', 'auto'), noise_floor=CFG.get('noise_floor', 0.0),
+                     noise_floor_raw=CFG.get('noise_floor_raw', 0.0), silence_threshold=CFG.get('silence_threshold', 0.5), noise_suppression=bool(CFG.get('noise_suppression', True)),
+                     streaming=CFG.get('streaming', 'auto'), calibrate=self.calib)
+        return json.dumps(r)
 
     def start(self, sess):
         if self.state == 'listening': return
@@ -403,46 +434,89 @@ class Daemon:
                     log('auto-close after paused timeout'); self.close()
 
     # --- audio
+    def _mic_cmd(self):
+        return ['pw-record', '--raw', '--rate', str(RATE), '--channels', '1', '--format', 's16'] + (['--target', CFG.get('mic')] if CFG.get('mic') else []) + ['-']
+
+    def _frontend(self):
+        """(denoiser or None, silero vad) for one listening session / calibration, per the current settings"""
+        dn = None
+        if CFG.get('noise_suppression', True):
+            dn = audiofx.Denoiser(CFG.get('noise_engine', 'auto'))
+            if dn.eng is None: log('noise suppression unavailable (%s): continuing without it' % dn.err.strip()); dn = None
+        vad = audiofx.Vad()
+        if not vad.ok: log('silero VAD unavailable (%s): using the adaptive energy gate' % vad.err)
+        return dn, vad
+
+    @staticmethod
+    def _meter_lv(v): return round(min(1.0, (max(0.0, v) / 6000.0) ** 0.5), 3)
+
+    def _thresholds(self, dn):
+        """-> (speech start prob, speech continue prob, energy multiplier, minimum energy threshold). silence_threshold is a SENSITIVITY 0..1 (higher = picks up quieter speech)."""
+        try: s = max(0.0, min(1.0, float(CFG.get('silence_threshold', 0.5))))
+        except Exception: s = 0.5
+        return 0.75 - 0.5 * s, 0.60 - 0.5 * s, 4.0 - 3.0 * s, (40.0 if dn else 150.0)
+
     def rec_loop(self, sess):
-        cmd = ['pw-record', '--raw', '--rate', str(RATE), '--channels', '1', '--format', 's16'] + (['--target', CFG.get('mic')] if CFG.get('mic') else []) + ['-']
+        cmd = self._mic_cmd()
         if sess.src: cmd = ['ffmpeg', '-v', 'quiet', '-re', '-i', sess.src, '-af', 'adelay=500,apad=pad_dur=2.5', '-f', 's16le', '-ar', '16000', '-ac', '1', '-']
         try: rec = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         except Exception as e:
             self.error('Microphone unavailable'); log('recorder failed', repr(e)); self.state = 'paused'; self.show(); return
         end_chunks = max(2, int(round(CFG['end_silence'] * 10)))
-        preroll = collections.deque(maxlen=3); phrase = []; in_speech = False; silent = 0; loud_n = 0
-        calib = []; floor = None; thr = 300; last_speech = time.time(); started = time.time(); eof = False
-        def submit(chunks, trail):
+        dn, vad = self._frontend()
+        log('listening: noise suppression=%s, vad=%s, noise mode=%s, streaming=%s' % (dn.name if dn else 'off', 'silero' if vad.ok else 'energy', CFG.get('noise_mode', 'auto'), CFG.get('streaming', 'auto')))
+        fl = audiofx.Floor(); preroll = collections.deque(maxlen=4); phrase = []; in_speech = False; silent = 0; loud_n = 0
+        last_speech = time.time(); eof = False; ph = None; n_chunks = 0
+        def submit(chunks, trail, ph):
             if loud_n < 3: return                      # blip, ignore
             audio = np.frombuffer(b''.join(chunks[:len(chunks) - max(0, trail - 2)] if trail > 2 else chunks), dtype=np.int16).astype(np.float32) / 32768.0
-            self.pending += 1; self.q.put((audio, sess)); log('phrase queued %.1fs' % (len(audio) / RATE))
+            if ph is not None:
+                ph.done = True
+                if self.partial is not None and self.partial[0] is ph: self.partial = None
+            self.pending += 1; self.q.put((audio, sess, ph)); log('phrase queued %.1fs' % (len(audio) / RATE))
         while not self.stop.is_set():
             d = rec.stdout.read(CHUNK)
             if not d: eof = True; break
+            d = d[:len(d) // 2 * 2]
+            if not d: continue
+            d_raw = d
+            if dn: d = dn.process(d)
             x = np.frombuffer(d, dtype=np.int16).astype(np.float32)
             rms = float(np.sqrt(np.mean(x * x))) if len(x) else 0.0
-            self.level = min(1.0, (max(0.0, rms - (floor or 0.0)) / 3000.0) ** 0.5); self.show('listening')
-            if floor is None:
-                calib.append(rms); preroll.append(d)
-                if len(calib) >= 4: floor = float(min(calib)); thr = min(max(250.0, floor * 3.0), 600.0)
-                continue
-            loud = rms > thr
+            n_chunks += 1; now = time.time()
+            p_start, p_cont, mult, min_thr = self._thresholds(dn)
+            p = vad.prob(d) if vad.ok else None
+            manual = CFG.get('noise_mode', 'auto') == 'manual'
+            ref = float(CFG.get('noise_floor') or 0.0) if manual and CFG.get('noise_floor') else (fl.v if fl.v is not None else rms)   # manual: the calibrated room noise; auto: the tracked floor
+            if manual: mult = 1.0 + 1.5 * (1.0 - (4.0 - mult) / 3.0)          # manual gate: 1.0x (most sensitive) .. 2.5x (least) the calibrated room noise, as Silero already does the main work
+            e_thr = max(min_thr, ref * mult)
+            if p is not None: loud = p >= (p_cont if in_speech else p_start)
+            else: loud = rms > e_thr and n_chunks > 3
+            if manual and p is not None: loud = loud and rms > e_thr          # manual mode: Silero AND the energy gate must agree
+            fl.update(rms, loud or in_speech)
+            self.rms = rms; self.floor = fl.v or 0.0; self.level = min(1.0, (max(0.0, rms - self.floor) / 3000.0) ** 0.5)
+            EXTRA['mic'] = self._meter_lv(rms); EXTRA['floor_lv'] = self._meter_lv(manual and float(CFG.get('noise_floor') or 0.0) or self.floor); EXTRA['speech'] = bool(loud)
+            self.show('listening')
+            d_asr = d if CFG.get('noise_suppression_asr', True) else d_raw      # the recognizer hears the denoised audio unless noise_suppression_asr is false (voice detection always uses the denoised audio)
             if not in_speech:
-                preroll.append(d)
-                if loud: in_speech = True; phrase = list(preroll); silent = 0; loud_n = 1; last_speech = time.time()
-                elif not loud: floor = 0.95 * floor + 0.05 * rms; thr = min(max(250.0, floor * 3.0), 600.0)
+                preroll.append(d_asr)
+                if loud:
+                    in_speech = True; phrase = list(preroll); silent = 0; loud_n = 1; last_speech = now
+                    ph = Phrase(sess); mode = self._stream_mode(); ph.off = (mode == 'off') or (mode == 'auto' and now < self.stream_block_until)
             else:
-                phrase.append(d)
-                if loud: silent = 0; loud_n += 1; last_speech = time.time()
+                phrase.append(d_asr)
+                if loud: silent = 0; loud_n += 1; last_speech = now
                 else: silent += 1
-                if silent >= end_chunks or len(phrase) > 250:
-                    submit(phrase, silent); in_speech = False; phrase = []; preroll.clear(); loud_n = 0; silent = 0
-            if not in_speech and CFG['auto_pause_seconds'] > 0 and time.time() - last_speech > CFG['auto_pause_seconds'] and not sess.src:
+                if silent >= end_chunks or (len(phrase) > 120 and silent >= 2) or len(phrase) > 250:    # a long phrase is cut at the first short pause after 12 s (hard cap 25 s)
+                    submit(phrase, silent, ph); in_speech = False; phrase = []; preroll.clear(); loud_n = 0; silent = 0; ph = None
+                elif ph is not None and not ph.off and loud_n >= 3: self._maybe_partial(ph, phrase, now)
+            if not in_speech and CFG['auto_pause_seconds'] > 0 and now - last_speech > CFG['auto_pause_seconds'] and not sess.src:
                 log('auto-pause (no speech)'); threading.Thread(target=lambda: self.handle({'cmd': 'pause'}), daemon=True).start(); break
         try: rec.terminate(); rec.wait(2)
         except Exception: rec.kill()
-        if in_speech and phrase: submit(phrase, silent)
-        self.level = 0.0
+        if in_speech and phrase: submit(phrase, silent, ph)
+        if dn: dn.close()
+        self.level = 0.0; EXTRA['mic'] = 0.0; EXTRA['speech'] = False
         if sess.oneshot and eof:       # test feed finished: drain, press Enter if asked, close
             self.q.join()
             if sess.enter and not DRY: self.typer.type('\n')
@@ -450,17 +524,184 @@ class Daemon:
             with self.lock:
                 self.state = 'idle'; self.sess = None; self.show(); self.typer.close()
 
+    # --- microphone monitor (live level meter for the settings panel while not listening) and room-noise calibration
+    def meter(self):
+        self.meter_until = time.time() + 6
+        if self.state != 'listening' and not (self.mon and self.mon.is_alive()) and self.calib.get('status') != 'running':
+            self.mon = threading.Thread(target=self._monitor, daemon=True); self.mon.start()
+
+    def _monitor(self):
+        try: rec = subprocess.Popen(self._mic_cmd(), stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        except Exception as e: log('meter: recorder failed', repr(e)); return
+        dn, vad = self._frontend(); fl = audiofx.Floor(); n = 0
+        try:
+            while time.time() < self.meter_until and self.state != 'listening' and self.calib.get('status') != 'running':
+                d = rec.stdout.read(CHUNK)
+                if not d: break
+                d = d[:len(d) // 2 * 2]
+                if dn: d = dn.process(d)
+                x = np.frombuffer(d, dtype=np.int16).astype(np.float32); rms = float(np.sqrt(np.mean(x * x))) if len(x) else 0.0; n += 1
+                p = vad.prob(d) if vad.ok else None; fl.update(rms, False)
+                self.rms = rms; self.floor = fl.v or 0.0
+                EXTRA['mic'] = self._meter_lv(rms); EXTRA['floor_lv'] = self._meter_lv(float(CFG.get('noise_floor') or 0.0) if CFG.get('noise_mode') == 'manual' and CFG.get('noise_floor') else self.floor)
+                EXTRA['speech'] = bool(p is not None and p >= 0.5) if n > 3 else False
+                self.level = min(1.0, (rms / 3000.0) ** 0.5)
+                if self.state != 'listening': self.show()
+        finally:
+            try: rec.terminate(); rec.wait(2)
+            except Exception: rec.kill()
+            if dn: dn.close()
+            if self.state != 'listening': self.level = 0.0; EXTRA['mic'] = 0.0; EXTRA['speech'] = False; self.show()
+
+    def calibrate(self):
+        if self.state == 'listening': return {'error': 'listening', 'calibrate': self.calib}
+        if self.calib.get('status') == 'running': return {'calibrate': self.calib}
+        self.calib = {'status': 'running'}; EXTRA['calib'] = 'running'
+        threading.Thread(target=self._calibrate, daemon=True).start()
+        return {'calibrate': self.calib}
+
+    def _calibrate(self):
+        """Measure the room for 2 s through the same front end the dictation uses and save the floor (noise_floor, after suppression) and noise_floor_raw."""
+        self.meter_until = 0
+        t = self.mon
+        if t and t.is_alive(): t.join(1.5)
+        raw = []; proc = []; rec = None; dn = None
+        try:
+            rec = subprocess.Popen(self._mic_cmd(), stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            dn, _ = self._frontend(); t0 = time.time()
+            for i in range(24):
+                d = rec.stdout.read(CHUNK)
+                if not d: break
+                d = d[:len(d) // 2 * 2]; x = np.frombuffer(d, dtype=np.int16).astype(np.float32); r0 = float(np.sqrt(np.mean(x * x))) if len(x) else 0.0
+                if dn: d = dn.process(d)
+                y = np.frombuffer(d, dtype=np.int16).astype(np.float32); r1 = float(np.sqrt(np.mean(y * y))) if len(y) else 0.0
+                if i >= 4: raw.append(r0); proc.append(r1)           # skip the first 0.4 s: the stream and the denoiser are still starting
+                EXTRA['mic'] = self._meter_lv(r1); self.show()
+            if len(proc) < 8: raise RuntimeError('microphone gave no audio')
+            fl = max(1.0, round(float(np.percentile(proc, 90)), 1)); flr = round(float(np.percentile(raw, 90)), 1)      # 90th percentile of the quiet room: an upper bound of its noise
+            persist_cfg(noise_floor=fl, noise_floor_raw=flr, noise_peak=round(float(np.max(proc)), 1))
+            self.calib = {'status': 'done', 'floor': fl, 'raw': flr}; log('calibrated room noise: floor %.1f (raw %.1f) over %.1fs' % (fl, flr, time.time() - t0))
+        except Exception as e:
+            self.calib = {'status': 'error', 'msg': str(e)}; log('calibration failed', repr(e))
+        finally:
+            if rec:
+                try: rec.terminate(); rec.wait(2)
+                except Exception: rec.kill()
+            if dn: dn.close()
+            EXTRA['calib'] = self.calib.get('status', ''); EXTRA['mic'] = 0.0
+            self.write_models(); self.show()
+            threading.Timer(4.0, self._clear_calib).start()
+    def _clear_calib(self):
+        if self.calib.get('status') != 'running': EXTRA['calib'] = ''; self.show()
+
+    # --- streaming (incremental typing): partial passes over the growing phrase, local agreement, adaptive pacing
+    def _stream_mode(self):
+        m = CFG.get('streaming', 'auto')
+        if m is False or str(m).lower() in ('false', 'off', '0'): return 'off'
+        if m is True or str(m).lower() in ('true', 'on', '1'): return 'on'
+        return 'auto'
+
+    def _maybe_partial(self, ph, phrase, now):
+        if ph.inflight or ph.done or now < ph.next_at or len(phrase) < 10 or len(phrase) - ph.last_n < 2 or self.asr is None: return
+        ph.inflight = True; ph.last_n = len(phrase); self.partial = (ph, b''.join(phrase))
+
+    @staticmethod
+    def _cmd_prefix(full):
+        w = full.split()
+        return (not w) or any(c.split()[:len(w)] == w for c in (CMD_PAUSE | CMD_CLOSE | CMD_DELETE))
+
+    def do_partial(self, ph, pcm):
+        if ph.done or self.asr is None: return
+        audio = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
+        t = time.time()
+        with ASR_LOCK: text = self.asr.transcribe(audio).strip()
+        t1 = time.time(); tt = t1 - t; dur = len(audio) / RATE
+        mode = self._stream_mode(); base = float(CFG.get('stream_interval', 0.4)); mx = 4.0 if mode == 'on' else 3.0
+        ph.passes += 1; ph.t_sum += tt; ph.interval = min(mx, max(base, 2.0 * tt)); ph.next_at = t + ph.interval      # at most ~50 % duty: back off as the pass gets slower
+        if mode == 'auto' and 2.0 * tt > mx:        # even the slowest allowed pace (a pass every 3 s) would take more than half of the time: this model cannot keep up
+            ph.off = True; log('streaming off for this phrase: partial pass took %.2fs on %.1fs of audio' % (tt, dur))
+            if dur < 2.5: self.stream_block_until = time.time() + 60; log('model too slow to stream: whole-phrase mode for the next 60 s')
+        if DRY: log('partial #%d %.1fs audio in %.2fs (next in %.2fs): %r' % (ph.passes, dur, tt, ph.interval, text))
+        if ph.done: return
+        self.stream_commit(ph, text, dur)
+
+    def stream_commit(self, ph, text, dur):
+        hyp = text.split(); nt = [norm(w) for w in hyp]; prev = ph.prev_n; ph.prev_n = nt
+        k = 0
+        while k < min(len(prev), len(nt)) and prev[k] == nt[k]: k += 1          # words two consecutive hypotheses agree on
+        n = len(ph.words)
+        if ph.words_n != nt[:n] or k <= n: return                                # a revised typed prefix, or nothing new yet: wait for the next pass
+        if n == 0:
+            full = ' '.join(w for w in nt if w)
+            if self._cmd_prefix(full) or (dur < 2.0 and full in HALLUC): return    # could still turn into "stop listening", "delete that" ...: hold everything
+        c = k
+        if nt[c - 1] in HOLD_LAST: c -= 1                                        # "new" may become "new line" / "new paragraph"
+        if c <= n: return
+        self._type_words(ph, hyp[n:c])
+
+    def _type_words(self, ph, words):
+        out = postprocess(' '.join(words))
+        if ph.sess.first and ph.sess.prefix and out: out = ph.sess.prefix + out
+        if out: ph.sess.first = False
+        txt = '' if not out else (out if out.endswith('\n') else out + ' ')
+        if not ph.words: self.last_typed = ''
+        if txt:
+            t = time.time(); how = self.typer.type(txt); log('stream typed %d word(s) via %s in %.2fs' % (len(words), how, time.time() - t))
+        ph.chunks.append((len(words), len(txt), '\n' in txt)); ph.words += words; ph.words_n += [norm(w) for w in words]; self.last_typed += txt
+
+    def stream_finish(self, ph, text):
+        """End of a streamed phrase: type what the final pass adds. Typed text is not touched, except a bounded correction (<= 32 chars, never across a newline) inside this phrase."""
+        F = text.split(); Fn = [norm(w) for w in F]; T = ph.words_n; nT = len(T)
+        k = 0
+        while k < min(nT, len(Fn)) and T[k] == Fn[k]: k += 1
+        if k == nT:
+            rem = F[nT:]; fix = ''
+            if nT and len(F) >= nT and ph.chunks and not ph.chunks[-1][2]:
+                lw, fw = ph.words[-1], F[nT - 1]
+                if fw.startswith(lw) and len(fw) > len(lw) and all(ch in '.,!?;:' for ch in fw[len(lw):]): fix = fw[len(lw):]
+            if fix:
+                if self.typer.backspace(1): self.last_typed = self.last_typed[:-1]
+                else: fix = ''
+            out = postprocess(' '.join(rem)) if rem else ''
+            txt = fix + ((' ' if fix else '') + (out if out.endswith('\n') else out + ' ') if out else (' ' if fix else ''))
+            if txt:
+                how = self.typer.type(txt); self.last_typed += txt; log('stream final: typed remainder (%d word(s)%s) via %s' % (len(rem), ', +punctuation' if fix else '', how))
+            return
+        # the final pass disagrees with words typed from partials: find the chunk the first difference is in
+        w = 0; ci = 0
+        while ci < len(ph.chunks) and w + ph.chunks[ci][0] <= k: w += ph.chunks[ci][0]; ci += 1
+        chars = sum(c[1] for c in ph.chunks[ci:]); nl = any(c[2] for c in ph.chunks[ci:])
+        if chars <= 32 and not nl and ci < len(ph.chunks):
+            if self.typer.backspace(chars):
+                self.last_typed = self.last_typed[:len(self.last_typed) - chars]
+                out = postprocess(' '.join(F[w:])); txt = (out if out.endswith('\n') else out + ' ') if out else ''
+                if txt: self.typer.type(txt); self.last_typed += txt
+                log('stream final: corrected the last %d chars (hypothesis revised)' % chars); return
+        rem = F[nT:] if len(F) > nT else []
+        if rem:
+            out = postprocess(' '.join(rem)); txt = (out if out.endswith('\n') else out + ' ')
+            self.typer.type(txt); self.last_typed += txt
+        log('stream final: kept typed text, differs from the final pass after word %d (%d chars not corrected)' % (k, chars))
+
     # --- transcription + typing
     def worker(self):
         while True:
-            audio, sess = self.q.get()
-            try: self.phrase(audio, sess)
+            try: audio, sess, ph = self.q.get(timeout=0.02)
+            except queue.Empty:
+                pt = self.partial
+                if pt is not None:
+                    self.partial = None
+                    try: self.do_partial(*pt)
+                    except Exception as e: log('partial error', repr(e)); pt[0].off = True
+                    finally: pt[0].inflight = False
+                continue
+            try: self.phrase(audio, sess, ph)
             except Exception as e:
                 log('phrase error', repr(e)); self.error('Could not type that phrase')
             finally:
                 self.pending -= 1; self.q.task_done()
 
-    def phrase(self, audio, sess):
+    def phrase(self, audio, sess, ph=None):
         while self.asr is None and not self.asr_err: time.sleep(0.05)
         if self.asr is None: self.error('Speech model failed to load'); return
         t = time.time()
@@ -468,6 +709,10 @@ class Daemon:
         tt = time.time() - t
         dur = len(audio) / RATE
         log('transcribed %.1fs audio in %.2fs (%d chars)%s' % (dur, tt, len(text), (': %r' % text) if DRY else ''))   # typed text is never logged (except in the developer dry-run mode)
+        if ph is not None and self._stream_mode() == 'auto' and tt > 1.5 and tt > 0.5 * dur and time.time() >= self.stream_block_until:    # the final pass alone was slow: don't probe a model like that with partial passes
+            self.stream_block_until = time.time() + 60; log('model too slow to stream (final pass %.1fs for %.1fs of audio): whole-phrase mode for the next 60 s' % (tt, dur))
+        if ph is not None and ph.passes: log('stream phrase: %d partial pass(es), avg %.2fs, %d word(s) typed before the end' % (ph.passes, ph.t_sum / ph.passes, len(ph.words)))
+        if ph is not None and ph.words: self.stream_finish(ph, text); return
         n = norm(text)
         if not n or (dur < 2.0 and n in HALLUC): return
         if n in CMD_PAUSE: log('voice command: pause'); threading.Thread(target=lambda: self.handle({'cmd': 'pause'}), daemon=True).start(); return

@@ -1,8 +1,11 @@
 # Changelog
 
-## Unreleased
+## 0.1.1 - 2026-11-14
 
-- New optional extra `extras/galaxy-book5-audio/`: Fedora speaker fix for the Samsung Galaxy Book5 Pro 360 (960QHA) - MAX98390 DKMS driver, boot services and a hidden EasyEffects preset. Hardware-checked (does nothing on other computers), `--dry-run`, `uninstall.sh`. Uses [Andycodeman/samsung-galaxy-book-linux-fixes](https://github.com/Andycodeman/samsung-galaxy-book-linux-fixes) (GPL-2.0) at commit `a6b13c5`, downloaded and checksum-verified at install time, not bundled. Not part of the dictation program.
+- **One-click model installs.** Every model in the catalog is always listed in the settings panel. Not downloaded: a **Download · size** button. Downloading: progress bar and **Cancel**. Failed: a short reason and **Retry**. Installed: an **Uninstall** button with a confirm (the model in use can't be uninstalled; the panel says why). Downloads run in a separate helper process (never inside GNOME Shell) and report progress through `models/.status/<id>.json`.
+- **Installed means verified.** A model counts as installed only when every file in the registry exists with the right size and a marker written after the SHA-256 check is present. Models downloaded by 0.1.0 are checked once and adopted automatically (`voice-typing-models adopt`). Downloads are staged in `models/.dl/` and moved into place only when complete, so a half-downloaded model (for example a Whisper folder holding only `config.json`) can no longer appear in `models/`.
+- `voice-typing-models`: new `status [--json]`, `cancel`, `adopt`; `remove` refuses the model in use; resumes partial downloads (also ones left by 0.1.0); IPv4 addresses are tried first (some networks have a broken IPv6 route to the model hosts and hung); readable error messages.
+- Needs one logout/login to load the new settings panel.
 
 ## 0.1.0 - 2026-11-14
 

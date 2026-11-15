@@ -269,6 +269,8 @@ else
   done
   [ "$DRY" = 1 ] || state_set models "$(python3 -c "import json,sys; print(json.dumps(sys.argv[1].split()))" "$MODELS_TO_GET")"
 fi
+say "Only one model was downloaded now. Every other model is one click away: click the gear on the voice bar and press Download next to it (Uninstall removes it again)."
+say "From a terminal: voice-typing-models list | install ID | remove ID"
 # config: create only if it does not exist (never overwrite your settings)
 if [ -f "$CONF/config.json" ]; then ok "Keeping your existing settings ($CONF/config.json)."
 elif [ "$DRY" = 1 ]; then dry "write $CONF/config.json (model $MODEL)"

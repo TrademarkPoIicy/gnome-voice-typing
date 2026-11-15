@@ -40,6 +40,8 @@ export default class VoiceTypingOverlay extends Extension {
         this._saveState = 'idle'; this._saveTimer = 0; this._readyUntil = 0; this._readyTimer = 0; this._wasLoading = false;
         this._dragging = false; this._capId = 0; this._grab = null; this._panelIdle = 0; this._locTok = 0; this._rawPrev = 'hidden'; this._locating = false; this._following = false;
         this._field = null; this._target = null; this._followId = 0; this._fsTimer = 0; this._focusSig = 0; this._userMoved = false;
+        // one-click model downloads: catalog (every model + its state) comes from `voice-typing-models status --json`, progress from models/.status/<id>.json
+        this._cat = null; this._dlW = {}; this._pend = {}; this._confirm = ''; this._note = {}; this._dlTimer = 0; this._catTimer = 0; this._adopted = false; this._catSig = ''; this._scrollKeep = 0;
 
         // ---- main bar ----
         this._bar = new St.BoxLayout({
@@ -102,7 +104,7 @@ export default class VoiceTypingOverlay extends Extension {
         this._dragEnd(false); this._stopFollow(); this._locTok++;
         if (this._caret) { try { this._caret.setFocusCallback(null); } catch (e) {} try { this._caret.destroy(); } catch (e) {} this._caret = null; }
         if (this._monId) { this._mon.disconnect(this._monId); this._mon.cancel(); this._monId = 0; }
-        for (const k of ['_watch', '_spinId', '_saveTimer', '_readyTimer', '_panelIdle']) if (this[k]) { GLib.source_remove(this[k]); this[k] = 0; }
+        for (const k of ['_watch', '_spinId', '_saveTimer', '_readyTimer', '_panelIdle', '_dlTimer', '_catTimer']) if (this[k]) { GLib.source_remove(this[k]); this[k] = 0; }
         try { Gio.File.new_for_path(DIR + '/ready').delete(null); } catch (e) {}
         for (const a of [this._bar, this._panel]) if (a) { Main.layoutManager.removeChrome(a); a.destroy(); }
         this._bar = this._panel = null;
@@ -191,15 +193,115 @@ export default class VoiceTypingOverlay extends Extension {
     _syncSel() {
         const m = this._models; if (!m) return;
         this._sel = {model: m.current, pause: m.settings.auto_pause_seconds, mic: m.settings.mic || '', sounds: m.settings.sounds !== false,
-                     dev: devOf((m.models || []).find(e => e.id === m.current) || {device: m.settings.device})};
+                     dev: devOf(this._entries().find(e => e.id === m.current) || (m.models || []).find(e => e.id === m.current) || {device: m.settings.device})};
         this._base = Object.assign({}, this._sel);
     }
     _pickDevice(dev) {   // switching device pre-selects the equivalent model there, else the device's recommended default
         const m = this._models; if (!m || this._sel.dev === dev) return;
-        const inDev = m.models.filter(e => devOf(e) === dev); if (!inDev.length) return;
+        const inDev = this._entries().filter(e => e.state === 'installed' && devOf(e) === dev);
+        if (!inDev.length) { this._sel.dev = dev; this._buildPanel(); return; }     // nothing installed for that device yet: just show its list (Download buttons)
         let id = (m.equiv || {})[this._sel.model];
         if (!id || !inDev.find(e => e.id === id)) { const d = (m.defaults || {})[dev]; id = inDev.find(e => e.id === d) ? d : inDev[0].id; }
         this._sel.dev = dev; this._sel.model = id; this._buildPanel();
+    }
+    // every model of the catalog, installed or not (falls back to the daemon's installed-only list when the model tool is missing)
+    _entries() {
+        if (this._cat) return this._cat;
+        const m = this._models; return ((m && m.models) || []).map(e => Object.assign({}, e, {state: 'installed'}));
+    }
+    _toolPath(name) { const cli = this._models && this._models.cli; return cli ? GLib.path_get_dirname(cli) + '/' + name : null; }
+    _statusDir() { const cli = this._models && this._models.cli; return cli ? GLib.path_get_dirname(GLib.path_get_dirname(cli)) + '/models/.status' : null; }
+    _spawnTool(args) {   // detached helper process (own session): downloads never run inside gnome-shell and survive it
+        const tool = this._toolPath('voice-typing-models'); if (!tool) return false;
+        const setsid = GLib.find_program_in_path('setsid');
+        try { Gio.Subprocess.new(setsid ? [setsid, '-f', tool, ...args] : [tool, ...args], Gio.SubprocessFlags.STDOUT_SILENCE | Gio.SubprocessFlags.STDERR_SILENCE); return true; }
+        catch (e) { console.error('voice-typing models: ' + e); return false; }
+    }
+    _refreshCat() {
+        const tool = this._toolPath('voice-typing-models'); if (!tool || !GLib.file_test(tool, GLib.FileTest.EXISTS)) return;
+        let p; try { p = Gio.Subprocess.new([tool, 'status', '--json'], Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_SILENCE); } catch (e) { return; }
+        p.communicate_utf8_async(null, null, (pr, res) => {
+            try {
+                if (!this._bar) return;
+                const [, out] = pr.communicate_utf8_finish(res);
+                const d = JSON.parse(out); const now = GLib.get_monotonic_time();
+                for (const e of d.models) {                                  // a download that was just started may not have written its status file yet
+                    const t = this._pend[e.id];
+                    if (t && now - t < 6e6 && (e.state === 'missing' || e.state === 'failed' || e.state === 'unverified')) { e.state = 'downloading'; e.pct = 0; e.got = 0; e.total = e.size; e.msg = ''; }
+                }
+                this._cat = d.models; this._free = d.free;
+                const act = d.models.some(e => ['downloading', 'verifying', 'installing', 'building'].includes(e.state));
+                if (act) this._dlTickStart();
+                if (d.models.some(e => e.state === 'unverified')) {          // downloaded by an older version / by hand: check once, then it counts as installed
+                    if (!this._adopted) { this._adopted = true; this._spawnTool(['adopt']); }
+                    if (!this._catTimer) this._catTimer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 2000, () => { this._catTimer = 0; if (this._bar && this._panelOpen) this._refreshCat(); return GLib.SOURCE_REMOVE; });
+                }
+                const sig = JSON.stringify(d.models.map(e => [e.id, e.state, e.msg || ''])) + this._confirm + JSON.stringify(this._note);
+                if (this._panelOpen && sig !== this._catSig) this._buildPanel();
+            } catch (e) { console.error('voice-typing models status: ' + e); }
+        });
+    }
+    _dlTickStart() { if (!this._dlTimer) this._dlTimer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 400, () => this._dlTick()); }
+    _dlTick() {
+        const dir = this._statusDir();
+        if (!this._bar || !dir || !this._cat) { this._dlTimer = 0; return GLib.SOURCE_REMOVE; }
+        const ACT = ['downloading', 'verifying', 'installing', 'building']; const now = GLib.get_monotonic_time();
+        let any = false, changed = false, refresh = false;
+        for (const e of this._cat) {
+            if (!ACT.includes(e.state) && !this._pend[e.id]) continue;
+            any = true; let s = null;
+            try { const [ok, b] = GLib.file_get_contents(`${dir}/${e.id}.json`); if (ok) s = JSON.parse(new TextDecoder().decode(b)); } catch (x) {}
+            if (!s) {   // no status file: finished (installed / cancelled) or never started
+                if (this._pend[e.id] && now - this._pend[e.id] < 6e6) continue;
+                delete this._pend[e.id]; refresh = true; continue;
+            }
+            delete this._pend[e.id];
+            if (s.status !== e.state) { e.state = s.status; changed = true; if (s.status === 'failed') refresh = true; }
+            e.pct = s.pct || 0; e.got = s.got || 0; e.total = s.total || e.size; e.msg = s.msg || '';
+        }
+        if (changed) this._buildPanel(); else if (this._panelOpen) for (const e of this._cat) if (this._dlW[e.id]) this._dlApply(e);
+        if (refresh) this._refreshCat();
+        if (!any && !refresh) { this._dlTimer = 0; return GLib.SOURCE_REMOVE; }
+        return GLib.SOURCE_CONTINUE;
+    }
+    _mb(n) { return n >= 1073741824 ? (n / 1073741824).toFixed(1) + ' GB' : n >= 1048576 ? Math.round(n / 1048576) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB'; }
+    _dlApply(e) {   // in-place progress update (no panel rebuild, so scrolling and hover are undisturbed)
+        const w = this._dlW[e.id]; if (!w) return;
+        const pct = Math.max(0, Math.min(100, e.pct || 0));
+        if (e.state === 'downloading') {
+            w.fill.width = Math.round(w.trackW * pct / 100); w.fill.style = `border-radius: 3px; background-color: ${ACCENT};`;
+            w.label.text = e.msg && e.msg !== '' ? e.msg : `${pct}%  ·  ${this._mb(e.got || 0)} of ${this._mb(e.total || e.size)}`;
+        } else {
+            w.fill.width = e.state === 'verifying' ? Math.round(w.trackW * pct / 100) : w.trackW; w.fill.style = `border-radius: 3px; background-color: ${e.state === 'verifying' ? ACCENT : 'rgba(76,194,255,0.45)'};`;
+            w.label.text = e.state === 'verifying' ? `Checking the download…  ${pct}%` : (e.msg || (e.state === 'building' ? 'Building the graphics-card engine…' : 'Installing…'));
+        }
+    }
+    _doDownload(id) {
+        const e = (this._cat || []).find(x => x.id === id); if (!e) return;
+        delete this._note[id]; this._confirm = '';
+        if (!this._spawnTool(['install', id])) { this._note[id] = 'Could not start the download.'; this._buildPanel(); return; }
+        e.state = 'downloading'; e.pct = 0; e.got = 0; e.total = e.size; e.msg = ''; this._pend[id] = GLib.get_monotonic_time();
+        this._buildPanel(); this._dlTickStart();
+    }
+    _doCancel(id) {
+        const tool = this._toolPath('voice-typing-models'); if (!tool) return;
+        const e = (this._cat || []).find(x => x.id === id); if (e) { e.msg = 'Cancelling…'; this._dlApply(e); }
+        delete this._pend[id];
+        try { const p = Gio.Subprocess.new([tool, 'cancel', id], Gio.SubprocessFlags.STDOUT_SILENCE | Gio.SubprocessFlags.STDERR_SILENCE);
+              p.wait_async(null, () => { if (this._bar) this._refreshCat(); }); } catch (x) {}
+    }
+    _doRemove(id) {
+        const tool = this._toolPath('voice-typing-models'); if (!tool) return;
+        this._confirm = ''; delete this._note[id];
+        let p; try { p = Gio.Subprocess.new([tool, 'remove', id, '--active', (this._models && this._models.current) || ''], Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE); } catch (x) { return; }
+        if (this._sel.model === id) this._sel.model = this._models.current;
+        p.communicate_utf8_async(null, null, (pr, res) => {
+            try {
+                const [, out, err] = pr.communicate_utf8_finish(res);
+                if (!pr.get_successful()) this._note[id] = ((err || out || '').trim().split('\n')[0]) || 'Could not uninstall it.';
+            } catch (x) { this._note[id] = 'Could not uninstall it.'; }
+            if (this._bar) { this._catSig = ''; this._refreshCat(); }
+        });
     }
     _dirty() { const a = this._sel, b = this._base; return a.model !== b.model || a.pause !== b.pause || a.mic !== b.mic || a.sounds !== b.sounds; }
 
@@ -570,7 +672,7 @@ export default class VoiceTypingOverlay extends Extension {
         if (!this._models) return;
         this._syncSel(); this._saveState = 'idle'; this._readyUntil = 0;
         if (this._saveTimer) { GLib.source_remove(this._saveTimer); this._saveTimer = 0; }
-        this._panelOpen = true; this._buildPanel();
+        this._confirm = ''; this._note = {}; this._scrollKeep = 0; this._panelOpen = true; this._buildPanel(); this._refreshCat();
         this._panel.visible = true; this._panel.reactive = true; this._placePanel(); this._geomSoon();
         this._panel.remove_all_transitions(); this._panel.ease({opacity: 255, duration: 120, mode: Clutter.AnimationMode.EASE_OUT_QUAD});
     }
@@ -584,9 +686,73 @@ export default class VoiceTypingOverlay extends Extension {
         this._writeGeom();
     }
 
+    _vadj() { const sv = this._listScroll; if (!sv) return null; try { return (sv.vadjustment || (sv.vscroll && sv.vscroll.adjustment)) || null; } catch (e) { return null; } }
+    _rememberScroll() { const a = this._vadj(); if (a) this._scrollKeep = a.value; }
+    _restoreScroll() {   // a rebuild would jump the model list back to the top
+        const keep = this._scrollKeep; if (!keep) return;
+        GLib.timeout_add(GLib.PRIORITY_DEFAULT, 30, () => { const a = this._vadj(); if (a && this._panelOpen) a.value = Math.min(keep, Math.max(0, a.upper - a.page_size)); return GLib.SOURCE_REMOVE; });
+    }
     _isLoading() { return !!(this._info && this._info.loading) || (this._models && this._models.switch && this._models.switch.status === 'loading'); }
 
     // system-impact tag (Light green / Medium amber / Heavy red) + muted detail; both optional (models.json 'impact', 'impact_detail')
+    // small text button for model rows: primary (accent) | danger (red) | plain
+    _pill(text, kind, onClick, enabled = true) {
+        const C = {primary: ['#4cc2ff', 'rgba(76,194,255,0.14)', 'rgba(76,194,255,0.30)', 'rgba(76,194,255,0.55)'],
+                   danger: ['#ff9a9c', 'rgba(255,107,107,0.12)', 'rgba(255,107,107,0.26)', 'rgba(255,107,107,0.55)'],
+                   plain: ['#ffffff', 'rgba(255,255,255,0.07)', 'rgba(255,255,255,0.15)', 'rgba(255,255,255,0.30)']}[kind];
+        const l = lbl(text, 10, C[0], 'bold'); const b = new St.Bin({child: l, y_align: Clutter.ActorAlign.CENTER, x_align: Clutter.ActorAlign.START});
+        return this._interactive(b, (a, s) => {
+            const fg = s.enabled ? C[0] : 'rgba(255,255,255,0.55)';
+            l.style = `${FONT} font-size: 10pt; font-weight: bold; color: ${fg};`;
+            a.style = `padding: 3px 12px; border-radius: 6px; border: 1px solid ${s.enabled ? C[3] : 'rgba(255,255,255,0.14)'}; background-color: ` +
+                      (!s.enabled ? 'rgba(255,255,255,0.04)' : s.down ? C[2] : s.hover ? C[2] : C[1]) + ';';
+        }, onClick, () => enabled);
+    }
+
+    // the line under a model's description: Download · size | progress + Cancel | Retry | Uninstall (+ confirm)
+    _actionLine(e, m) {
+        const box = new St.BoxLayout({orientation: Clutter.Orientation.VERTICAL, x_expand: true, style: 'padding-top: 6px; spacing: 5px;'});
+        const line = () => new St.BoxLayout({x_expand: true, style: 'spacing: 10px;', y_align: Clutter.ActorAlign.CENTER});
+        const note = (t, c) => { const n = wrapLbl(lbl(t, 9.5, c || SEC)); n.y_align = Clutter.ActorAlign.CENTER; return n; };
+        const st = e.state;
+        if (st === 'installed') {
+            const isCur = e.id === m.current, loading = m.switch && m.switch.status === 'loading' && m.switch.target === e.id;
+            const l = line();
+            if (this._confirm === e.id) {
+                l.add_child(note('Remove it from this computer?', '#fff'));
+                l.add_child(this._pill('Remove', 'danger', () => this._doRemove(e.id)));
+                l.add_child(this._pill('Keep', 'plain', () => { this._confirm = ''; this._buildPanel(); }));
+            } else {
+                l.add_child(this._pill('Uninstall', 'plain', () => { this._confirm = e.id; this._buildPanel(); }, !isCur && !loading));
+                l.add_child(note('Installed · ' + (e.size_h || ''), 'rgba(108,203,95,0.95)'));
+            }
+            box.add_child(l);
+            if (this._confirm !== e.id && (isCur || loading))     // the reason gets its own full-width line so it can wrap
+                box.add_child(note(isCur ? 'In use right now. Pick another model and press Save, then you can uninstall this one.' : 'It is loading right now.'));
+        } else if (['downloading', 'verifying', 'installing', 'building'].includes(st)) {
+            const trackW = 300;
+            const track = new St.BoxLayout({width: trackW, height: 6, style: 'border-radius: 3px; background-color: rgba(255,255,255,0.14);', x_align: Clutter.ActorAlign.START});
+            const fill = new St.Widget({height: 6, width: 0, style: `border-radius: 3px; background-color: ${ACCENT};`});
+            track.add_child(fill); box.add_child(track);
+            const l = line(); const label = wrapLbl(lbl('', 9.5, 'rgba(255,255,255,0.9)')); label.y_align = Clutter.ActorAlign.CENTER;
+            l.add_child(label); l.add_child(this._pill('Cancel', 'plain', () => this._doCancel(e.id))); box.add_child(l);
+            this._dlW[e.id] = {fill, label, trackW}; this._dlApply(e);
+        } else if (st === 'failed') {
+            box.add_child(note(e.msg || 'The download failed.', '#ff9a9c'));
+            const l = line(); l.add_child(this._pill('Retry', 'primary', () => this._doDownload(e.id))); box.add_child(l);
+        } else if (st === 'unverified') {
+            box.add_child(note('Checking the files already on disk…'));
+        } else if (st === 'setup') {
+            box.add_child(note(e.setup === 'engine' ? 'The files are here; the graphics-card engine still has to be built.' : 'The files are here; the faster-whisper add-on still has to be installed.'));
+            const l = line(); l.add_child(this._pill('Set up', 'primary', () => this._doDownload(e.id))); box.add_child(l);
+        } else {   // missing
+            const l = line(); l.add_child(this._pill('Download · ' + (e.size_h || this._mb(e.size || 0)), 'primary', () => this._doDownload(e.id)));
+            box.add_child(l);
+        }
+        if (this._note[e.id]) box.add_child(note(this._note[e.id], '#ff9a9c'));
+        return box;
+    }
+
     _impactRow(e) {
         const impact = (e.impact || '').toString().trim(), detail = (e.impact_detail || '').toString().trim();
         if (!impact && !detail) return null;
@@ -604,7 +770,8 @@ export default class VoiceTypingOverlay extends Extension {
 
     _buildPanel() {
         const m = this._models; if (!m || !this._panel) return;
-        const P = this._panel; P.destroy_all_children(); this._spinners = [this._barSpin];
+        const P = this._panel; this._rememberScroll(); P.destroy_all_children(); this._spinners = [this._barSpin]; this._dlW = {};
+        this._catSig = this._cat ? JSON.stringify(this._cat.map(e => [e.id, e.state, e.msg || ''])) + this._confirm + JSON.stringify(this._note) : '';
         const loading = this._isLoading(); this._panelLoading = loading;
         const dim = (a) => { if (loading) { a.opacity = 110; a.reactive = false; } return a; };
         const sect = (t, first) => {   // small grey heading with a subtle divider above it
@@ -627,7 +794,7 @@ export default class VoiceTypingOverlay extends Extension {
         P.add_child(sect('Run on', true)); this._devActors = {};
         const seg = new St.BoxLayout({x_expand: true, style: 'padding: 3px; spacing: 3px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.06); background-color: rgba(255,255,255,0.06);'});
         for (const dev of ['gpu', 'cpu']) {
-            const on = this._sel.dev === dev, avail = m.models.some(e => devOf(e) === dev);
+            const on = this._sel.dev === dev, avail = this._entries().some(e => devOf(e) === dev);
             const b = new St.Bin({x_expand: true, child: lbl(DEV_LABEL[dev], 10.5, on ? '#000' : '#fff', on ? 'bold' : null)});
             b.child.x_align = Clutter.ActorAlign.CENTER;
             this._interactive(b, (a, st) => {
@@ -650,25 +817,26 @@ export default class VoiceTypingOverlay extends Extension {
         scroll.add_child(list);
         this._rowActors = {};
         const seen = new Set();
-        for (const e of m.models.filter(x => devOf(x) === this._sel.dev && !seen.has(x.id) && seen.add(x.id))) {
-            const on = this._sel.model === e.id;
+        for (const e of this._entries().filter(x => devOf(x) === this._sel.dev && !seen.has(x.id) && seen.add(x.id))) {
+            const inst = e.state === 'installed'; const on = inst && this._sel.model === e.id;
             const row = new St.BoxLayout({x_expand: true});
-            const radio = new St.Bin({width: 18, height: 18, y_align: Clutter.ActorAlign.CENTER,
-                style: `border-radius: 9px; border: 2px solid ${on ? ACCENT : 'rgba(255,255,255,0.55)'};`});
+            const radio = new St.Bin({width: 18, height: 18, y_align: Clutter.ActorAlign.START, opacity: inst ? 255 : 90,
+                style: `border-radius: 9px; border: 2px solid ${on ? ACCENT : 'rgba(255,255,255,0.55)'}; margin-top: 2px;`});
             if (on) radio.set_child(new St.Widget({width: 8, height: 8, x_align: Clutter.ActorAlign.CENTER, y_align: Clutter.ActorAlign.CENTER,
                                                    style: `border-radius: 4px; background-color: ${ACCENT};`}));
             const col = new St.BoxLayout({orientation: Clutter.Orientation.VERTICAL, x_expand: true, y_align: Clutter.ActorAlign.CENTER});
             col.add_child(wrapLbl(lbl(e.name + (e.id === m.current ? '  ·  current' : ''), 11, '#fff', 'bold')));
             col.add_child(wrapLbl(lbl(`${e.label} · ${e.speed}`, 9.5, SEC)));
             const imp = this._impactRow(e); if (imp) col.add_child(imp);
+            if (this._cat) col.add_child(this._actionLine(e, m));
             row.add_child(radio); row.add_child(col);
             this._interactive(row, (a, s) => {
                 a.style = 'spacing: 12px; padding: 7px 10px; border-radius: 6px; border: 1px solid ' + (on ? 'rgba(76,194,255,0.38)' : 'transparent') + '; background-color: ' +
                           (on ? (s.down ? 'rgba(76,194,255,0.22)' : 'rgba(76,194,255,0.14)') : s.down ? 'rgba(255,255,255,0.04)' : s.hover ? 'rgba(255,255,255,0.07)' : 'transparent') + ';';
-            }, () => { this._sel.model = e.id; this._buildPanel(); });
-            dim(row); list.add_child(row); this._rowActors[e.id] = row;
+            }, () => { this._sel.model = e.id; this._buildPanel(); }, () => inst);     // a model that is not installed cannot be picked: use its Download button
+            if (loading && inst) dim(row); list.add_child(row); this._rowActors[e.id] = row;
         }
-        P.add_child(scroll);
+        this._listScroll = scroll; P.add_child(scroll); this._restoreScroll();
 
         P.add_child(sect('Pause after silence'));
         const chips = new St.BoxLayout({style: 'spacing: 6px; padding: 2px 0 0 0;'}); this._chipActors = {};
@@ -772,7 +940,7 @@ export default class VoiceTypingOverlay extends Extension {
     _save() {
         if (this._isLoading() || this._saveState !== 'idle' || !this._dirty()) return;
         const m = this._models, payload = {};
-        if (this._sel.model !== m.current) { payload.model = this._sel.model; payload.device = devOf(m.models.find(x => x.id === this._sel.model)); }
+        if (this._sel.model !== m.current) { payload.model = this._sel.model; payload.device = devOf(this._entries().find(x => x.id === this._sel.model)); }
         if (this._sel.pause !== m.settings.auto_pause_seconds) payload.auto_pause_seconds = this._sel.pause;
         if (this._sel.mic !== (m.settings.mic || '')) payload.mic = this._sel.mic;
         if (this._sel.sounds !== (m.settings.sounds !== false)) payload.sounds = this._sel.sounds;
@@ -781,7 +949,7 @@ export default class VoiceTypingOverlay extends Extension {
         if (this._saveTimer) GLib.source_remove(this._saveTimer);
         this._saveTimer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1400, () => { this._saveTimer = 0; this._saveState = 'idle'; this._refreshSave(); return GLib.SOURCE_REMOVE; });
         if (payload.model) {   // optimistic: show spinner at once; daemon confirms via models.json/state.json
-            const e = m.models.find(x => x.id === payload.model);
+            const e = this._entries().find(x => x.id === payload.model);
             this._info = Object.assign({}, this._info, {loading: e ? e.name : payload.model});
             m.switch = {status: 'loading', target: payload.model, msg: ''};
             this._buildPanel(); this._apply(this._state, 0, '', false);

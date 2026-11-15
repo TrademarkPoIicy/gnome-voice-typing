@@ -23,8 +23,10 @@ the text box you are typing in.
 - Settings (gear icon): model picker with a clear Light / Medium / Heavy system-impact tag, **Run on: graphics card or processor**
   (if one fails to load, the other is used automatically), pause after silence (10 s / 30 s / 1 min / 2 min / never), microphone,
   sounds on/off.
-- Many models: Parakeet v3 (GPU) and v2 (CPU), Whisper (tiny to large-v3-turbo, GPU and CPU), Moonshine. Downloaded on demand,
-  checksum-verified.
+- Many models: Parakeet v3 (GPU) and v2 (CPU), Whisper (tiny to large-v3-turbo, GPU and CPU), Moonshine. **One-click installs:** the
+  installer downloads just one default model; every model is always listed in the settings panel, and **Download** (with its size)
+  fetches, checksum-verifies and installs it, with a progress bar and Cancel. Installed models show **Uninstall** (not available for
+  the model in use).
 
 ## Requirements
 
@@ -94,10 +96,10 @@ shortcut conflicts, asks, then removes only that accelerator from that one setti
 
 - Press the shortcut: the bar appears next to your text box and the start chime plays. Speak; each phrase is typed when you pause.
 - Press it again (or say "stop listening") to pause; again to resume. Say "close dictation" or click the X to stop completely.
-- Click the gear for settings. Click **Save** to apply a model change (the new model loads in the background; the old one keeps working).
+- Click the gear for settings. More models: press **Download · size** on a model row (progress bar, **Cancel**); when it says Installed you can pick it. **Uninstall** removes a model you are not using. Click **Save** to apply a model change (the new model loads in the background; the old one keeps working).
 - Command line: `voice-typing toggle | pause | resume | close | status | quit`, `voice-typing --models`,
   `voice-typing --model parakeet`, `voice-typing --apply '{"device":"cpu"}'`, `voice-typing --apply '{"sounds":false}'`.
-  Model management: `voice-typing-models list | install ID | remove ID | verify`.
+  Model management: `voice-typing-models list | status | install ID | cancel ID | remove ID | verify | adopt`.
 - Accented and non-English characters are typed through the clipboard (`Ctrl+V`, or `Ctrl+Shift+V` in terminals); your clipboard is
   restored afterwards. In pop-up boxes that refuse clipboard access, accents fall back to plain letters ("café" becomes "cafe").
 
@@ -158,16 +160,6 @@ all over HTTPS, with SHA-256 / commit-id verification. The program itself does n
 - Late layout shifts after the bar appeared (for example a banner appearing in the page) do not move the bar; drag it.
 - Input into some pop-over entries can lose accented characters (see above).
 - The visual style of the bar is inspired by common desktop dictation bars; it is not affiliated with any other product.
-
-## Extra: Samsung Galaxy Book5 Pro 360 speaker fix (Fedora)
-
-Unrelated to dictation, and **not** installed by `install.sh`: [`extras/galaxy-book5-audio/`](extras/galaxy-book5-audio/) holds an optional
-installer that makes the built-in speakers of the Samsung Galaxy Book5 Pro 360 work on Fedora (MAX98390 amplifier driver plus an EasyEffects
-preset). It checks the hardware first and does nothing on any other computer. Built on
-[Andycodeman/samsung-galaxy-book-linux-fixes](https://github.com/Andycodeman/samsung-galaxy-book-linux-fixes) (GPL-2.0, downloaded at a pinned,
-checksum-verified commit, not bundled).
-
-**Maintained in its own repository: [TrademarkPoIicy/galaxy-book-fedora-audio](https://github.com/TrademarkPoIicy/galaxy-book-fedora-audio)** (one-command install, release v1.0.0).
 
 ## Attribution
 

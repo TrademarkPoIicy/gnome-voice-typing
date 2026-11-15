@@ -30,7 +30,6 @@ credit above. Using the tool for your own dictation needs nothing.
 | ydotool / ydotoold | distro package (separate program, started as a child process; **not** bundled or linked). Where the distro only has the old 0.1.x series (Ubuntu 24.04, Debian 12), v1.0.4 is built from source (commit `57ba7d0a...`) on your machine by `scripts/build-ydotool.sh` | AGPL-3.0 |
 | wl-clipboard (`wl-copy`, `wl-paste`) | distro package (separate program) | GPL-3.0 |
 | PipeWire tools (`pw-record`, `pw-play`), PulseAudio utils (`pactl`) | distro packages | MIT / LGPL |
-| samsung-galaxy-book-linux-fixes `speaker-fix/` (`Andycodeman/samsung-galaxy-book-linux-fixes`, commit `a6b13c5dd6b5ca5bccca3e8c417c77e3a3a0d138`) | **optional extra only** (`extras/galaxy-book5-audio/`, Galaxy Book5 Pro 360 owners): downloaded by tarball at that commit and checked against a pinned SHA-256; DKMS-built locally; never bundled. Its EasyEffects presets derive from JackHack96/EasyEffects-Presets | GPL-2.0 (presets: see upstream `LICENSE-JackHack96`) |
 
 ## Sounds
 

@@ -22,6 +22,8 @@ const CLOSE_RED = '#c42b1c', CLOSE_RED_DOWN = '#9d2216', CLOSE_GLOW = 'rgba(232,
 
 const devOf = (e) => (e && e.device) || (e && e.backend === 'vk' ? 'gpu' : 'cpu');
 const DEV_LABEL = {gpu: 'Graphics card', cpu: 'Processor'};
+const PAGES = [['model', 'Speech model', 'audio-input-microphone-symbolic'], ['mic', 'Microphone & noise', 'audio-volume-high-symbolic'],
+               ['typing', 'Typing & sounds', 'input-keyboard-symbolic'], ['setup', 'Setup & uninstall', 'emblem-system-symbolic']];
 const shortName = (n) => (n || '').replace(/\s*\(.*?\)/g, '').replace(/-TDT.*$/, '').replace(/ q5$/, '').trim();
 
 const SEC = 'rgba(255,255,255,0.74)';      // secondary text on the dark panel (~8:1 contrast)
@@ -674,6 +676,8 @@ export default class VoiceTypingOverlay extends Extension {
                 if (this._soundRow) g.sounds = c(this._soundRow);
                 g.dev = {}; for (const [k, a] of Object.entries(this._devActors || {})) g.dev[k] = c(a);
                 if (this._panelClose) g.panelClose = c(this._panelClose);
+                if (this._panelBack) g.back = c(this._panelBack);
+                g.page = this._page || 'home'; g.cats = {}; for (const [k, a] of Object.entries(this._catActors || {})) g.cats[k] = c(a);
             }
             const key = JSON.stringify(g);
             if (key !== this._geomKey) { this._geomKey = key; GLib.file_set_contents(DIR + '/geometry.json', key); }
@@ -771,7 +775,7 @@ export default class VoiceTypingOverlay extends Extension {
         if (!this._models) return;
         this._syncSel(); this._saveState = 'idle'; this._readyUntil = 0;
         if (this._saveTimer) { GLib.source_remove(this._saveTimer); this._saveTimer = 0; }
-        this._confirm = ''; this._note = {}; this._scrollKeep = 0; this._panelOpen = true; this._buildPanel(); this._refreshCat(); if (!this._depsOpen) this._refreshDeps(false); this._depsOpen = false;
+        this._confirm = ''; this._note = {}; this._scrollKeep = 0; this._page = this._page === 'setup' ? 'setup' : null; this._unConfirm = false; this._panelOpen = true; this._buildPanel(); this._refreshCat(); if (!this._depsOpen) this._refreshDeps(false); this._depsOpen = false;
         this._panel.visible = true; this._panel.reactive = true; this._placePanel(); this._geomSoon();
         this._panel.remove_all_transitions(); this._panel.ease({opacity: 255, duration: 120, mode: Clutter.AnimationMode.EASE_OUT_QUAD});
     }
@@ -870,6 +874,8 @@ export default class VoiceTypingOverlay extends Extension {
     _buildPanel() {
         const m = this._models; if (!m || !this._panel) return;
         const P = this._panel; this._rememberScroll(); P.destroy_all_children(); this._spinners = [this._barSpin]; this._dlW = {};
+        this._rowActors = {}; this._chipActors = {}; this._devActors = {}; this._micRow = this._soundRow = this._listScroll = this._nzFill = null; this._catActors = {};
+        const pg = PAGES.some(x => x[0] === this._page) ? this._page : null; this._page = pg;
         this._catSig = this._cat ? JSON.stringify(this._cat.map(e => [e.id, e.state, e.msg || ''])) + this._confirm + JSON.stringify(this._note) : '';
         const loading = this._isLoading(); this._panelLoading = loading;
         const dim = (a) => { if (loading) { a.opacity = 110; a.reactive = false; } return a; };
@@ -883,12 +889,17 @@ export default class VoiceTypingOverlay extends Extension {
 
         // header: title + close (red glow on hover)
         const head = new St.BoxLayout({style: 'spacing: 8px;'});
-        const title = lbl('Voice typing settings', 13, '#fff', 'bold'); title.x_expand = true; title.y_align = Clutter.ActorAlign.CENTER;
+        if (pg) { this._panelBack = this._iconButton('go-previous-symbolic', 16, false, () => { this._page = null; this._scrollKeep = 0; this._buildPanel(); }); head.add_child(this._panelBack); }
+        else this._panelBack = null;
+        const title = lbl(pg ? PAGES.find(x => x[0] === pg)[1] : 'Voice typing settings', 13, '#fff', 'bold'); title.x_expand = true; title.y_align = Clutter.ActorAlign.CENTER;
         head.add_child(title);
         this._panelClose = this._iconButton('window-close-symbolic', 16, true, () => this._closePanel());
         head.add_child(this._panelClose);
         P.add_child(head);
-        const depsCard = this._depsCard(); if (depsCard) P.add_child(depsCard);
+        const depsCard = (!pg || pg === 'setup') ? this._depsCard() : null; if (depsCard) P.add_child(depsCard);
+        if (!pg) P.add_child(this._homePage(m));
+
+        if (pg === 'model') {
 
         // run on: Graphics card | Processor (segmented control)
         P.add_child(sect('Run on', true)); this._devActors = {};
@@ -937,8 +948,11 @@ export default class VoiceTypingOverlay extends Extension {
             if (loading && inst) dim(row); list.add_child(row); this._rowActors[e.id] = row;
         }
         this._listScroll = scroll; P.add_child(scroll); this._restoreScroll();
+        }
 
-        P.add_child(sect('Pause after silence'));
+        if (pg === 'typing') {
+
+        P.add_child(sect('Pause after silence', true));
         const chips = new St.BoxLayout({style: 'spacing: 6px; padding: 2px 0 0 0;'}); this._chipActors = {};
         for (const [v, t] of PAUSES) {
             const on = this._sel.pause === v;
@@ -950,8 +964,10 @@ export default class VoiceTypingOverlay extends Extension {
             dim(chip); chips.add_child(chip); this._chipActors[v] = chip;
         }
         P.add_child(chips);
+        }
 
-        P.add_child(sect('Microphone'));
+        if (pg === 'mic') {
+        P.add_child(sect('Microphone', true));
         const mics = m.settings.mics || [];
         const cur = mics.find(x => x.id === this._sel.mic) || mics[0] || {name: 'System default', id: ''};
         const micRow = new St.BoxLayout({x_expand: true});
@@ -963,6 +979,10 @@ export default class VoiceTypingOverlay extends Extension {
                       (s.down ? 'rgba(255,255,255,0.04)' : s.hover ? 'rgba(255,255,255,0.10)' : 'rgba(255,255,255,0.06)') + ';';
         }, () => { const k = mics.findIndex(x => x.id === cur.id); this._sel.mic = mics[(k + 1) % mics.length].id; this._buildPanel(); });
         dim(micRow); P.add_child(micRow); this._micRow = micRow;
+        P.add_child(this._noiseSectionSafe(sect, dim));
+        }
+
+        if (pg === 'typing') {
 
         // sounds on/off switch
         P.add_child(sect('Sounds'));
@@ -980,8 +1000,9 @@ export default class VoiceTypingOverlay extends Extension {
                       (st.down ? 'rgba(255,255,255,0.04)' : st.hover ? 'rgba(255,255,255,0.10)' : 'rgba(255,255,255,0.06)') + ';';
         }, () => { this._sel.sounds = !this._sel.sounds; this._buildPanel(); });
         dim(sw); P.add_child(sw); this._soundRow = sw;
+        }
 
-        P.add_child(this._noiseSectionSafe(sect, dim));
+        if (pg === 'setup') P.add_child(this._setupInfo(m, !!depsCard));
 
         // footer: status (spinner / ready / error) + Save
         const foot = new St.BoxLayout({style: 'padding-top: 14px; spacing: 10px;'});
@@ -992,9 +1013,50 @@ export default class VoiceTypingOverlay extends Extension {
         foot.add_child(stat);
         this._buildSave(); foot.add_child(this._saveBtn);
         P.add_child(foot);
-        P.add_child(this._uninstallSection());
+        if (pg === 'setup') P.add_child(this._uninstallSection());
         this._updatePanelStatus(); this._ensureSpin();
         if (this._panel.visible) { this._placePanel(); this._geomSoon(); }
+    }
+
+    // ---------- settings home: one clickable tile per category ----------
+    _homePage(m) {
+        const box = new St.BoxLayout({orientation: Clutter.Orientation.VERTICAL, x_expand: true, style: 'spacing: 6px; padding-top: 10px;'});
+        try {
+            const s = m.settings || {}, cur = this._entries().find(e => e.id === this._sel.model);
+            const mics = s.mics || [], mic = mics.find(x => x.id === this._sel.mic) || mics[0];
+            const pause = (PAUSES.find(x => x[0] === this._sel.pause) || [0, ''])[1];
+            const miss = this._deps && this._deps.needed ? (this._deps.total || (this._deps.missing || []).length) : 0;
+            const sub = {
+                model: (cur ? cur.name : 'No model picked') + '  ·  ' + DEV_LABEL[this._sel.dev],
+                mic: (mic ? mic.name : 'System default') + '  ·  noise suppression ' + (s.noise_suppression !== false ? 'on' : 'off'),
+                typing: 'Pause after ' + (pause === 'Never' ? 'never' : pause) + '  ·  sounds ' + (this._sel.sounds ? 'on' : 'off'),
+                setup: miss ? `${miss} optional package${miss === 1 ? '' : 's'} missing  ·  uninstall` : 'Optional packages  ·  uninstall',
+            };
+            for (const [id, name, icon] of PAGES) {
+                const row = new St.BoxLayout({x_expand: true});
+                row.add_child(new St.Icon({icon_name: icon, icon_size: 18, y_align: Clutter.ActorAlign.CENTER, style: `color: ${ACCENT};`}));
+                const col = new St.BoxLayout({orientation: Clutter.Orientation.VERTICAL, x_expand: true, y_align: Clutter.ActorAlign.CENTER});
+                col.add_child(lbl(name, 11, '#fff', 'bold'));
+                const d = lbl(sub[id], 9.5, SEC); d.clutter_text.ellipsize = Pango.EllipsizeMode.END; col.add_child(d);
+                row.add_child(col);
+                row.add_child(new St.Icon({icon_name: 'go-next-symbolic', icon_size: 14, y_align: Clutter.ActorAlign.CENTER, style: 'color: rgba(255,255,255,0.6);'}));
+                this._interactive(row, (a, st) => {
+                    a.style = 'spacing: 12px; padding: 10px 12px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.07); background-color: ' +
+                              (st.down ? 'rgba(255,255,255,0.04)' : st.hover ? 'rgba(255,255,255,0.11)' : 'rgba(255,255,255,0.06)') + ';';
+                }, () => { this._page = id; this._scrollKeep = 0; this._unConfirm = false; this._buildPanel(); });
+                box.add_child(row); this._catActors[id] = row;
+            }
+        } catch (e) { console.error('voice-typing settings home: ' + e); }
+        return box;
+    }
+    _setupInfo(m, hasCard) {
+        const box = new St.BoxLayout({orientation: Clutter.Orientation.VERTICAL, x_expand: true, style: 'spacing: 4px; padding-top: 10px;'});
+        try {
+            if (!hasCard) box.add_child(wrapLbl(lbl('✓ All optional packages are installed.', 10.5, '#7ddc70')));
+            const v = m.version || (m.settings || {}).version;
+            if (v) box.add_child(lbl('Version ' + v, 9.5, SEC));
+        } catch (e) {}
+        return box;
     }
 
     // ---------- background noise + uninstall (own section builders; each is wrapped so a failure here can never break the rest of the panel) ----------

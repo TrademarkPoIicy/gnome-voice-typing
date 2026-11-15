@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.5
+
+- Settings is split into categories. It opens to four tiles (Speech model, Microphone & noise, Typing & sounds, Setup & uninstall), each showing a one-line summary, and each opens its own page with a back arrow, instead of one tall panel.
+
 ## 0.1.4
 
 - Typing works on machines without ydotool: if /dev/uinput is writable but ydotool isn't installed, the daemon now uses GNOME's typing portal instead of failing every phrase.

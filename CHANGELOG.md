@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.6
+
+- No more GNOME remote-control (screen sharing) prompt: the portal typing fallback is off by default (GVT_PORTAL=1 brings it back).
+- Typing permission (/dev/uinput udev rule) is part of the setup card: one password prompt installs any missing packages and the rule together. Uninstall removes it.
+- When typing isn't set up, the bar says so and points to Settings > Setup & uninstall instead of "Could not type that phrase".
+
 ## 0.1.5
 
 - Settings is split into categories. It opens to four tiles (Speech model, Microphone & noise, Typing & sounds, Setup & uninstall), each showing a one-line summary, and each opens its own page with a back arrow, instead of one tall panel.

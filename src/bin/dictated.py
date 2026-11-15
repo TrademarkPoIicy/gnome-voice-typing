@@ -128,6 +128,7 @@ def chime(name):
     return   # sounds are played by the overlay extension via bin/chime.sh on state changes
 
 # ---------------- typing ----------------
+class NotReady(RuntimeError): pass
 class Typer:
     CHARMAP = (('\u2014', ' - '), ('\u2013', '-'), ('\u2018', "'"), ('\u2019', "'"), ('\u201c', '"'), ('\u201d', '"'),
                ('\u2026', '...'), ('\u00a0', ' '), ('\u202f', ' '))
@@ -135,14 +136,14 @@ class Typer:
         self.yd = None; self.portal = None
     def ydotool_ready(self):
         if not os.access('/dev/uinput', os.W_OK): return False
-        if not (os.access(YDOTOOL, os.X_OK) and os.access(YDOTOOLD, os.X_OK)): return False     # ydotool not installed: use the portal instead of failing every phrase
+        if not (os.access(YDOTOOL, os.X_OK) and os.access(YDOTOOLD, os.X_OK)): return False     # ydotool not installed
         if self.yd and self.yd.poll() is None and os.path.exists(YSOCK): return True
         try: os.unlink(YSOCK)
         except Exception: pass
         env = dict(os.environ, YDOTOOL_SOCKET=YSOCK)
         try: self.yd = subprocess.Popen([YDOTOOLD, '-p', YSOCK], env=env, start_new_session=True,
                                         stdin=subprocess.DEVNULL, stdout=open(LOG, 'a'), stderr=subprocess.STDOUT)
-        except OSError as e: log('ydotoold could not start (%r): using the portal' % e); return False
+        except OSError as e: log('ydotoold could not start (%r)' % e); return False
         for _ in range(60):
             if os.path.exists(YSOCK): return True
             time.sleep(0.05)
@@ -211,7 +212,9 @@ class Typer:
             elif old == b'':
                 self._clip(['--clear'])
             return 'ydotool'
-        # fallback: portal (shows GNOME's Remote Desktop indicator); persistent helper, 12 s startup cap
+        # No GNOME remote-control portal by default (it pops a screen-sharing prompt). Opt back in with GVT_PORTAL=1.
+        if os.environ.get('GVT_PORTAL') != '1':
+            raise NotReady('Typing is not set up: open Settings > Setup & uninstall and press Install')
         if self.portal is None or self.portal.poll() is not None:
             p = subprocess.Popen(['/usr/bin/python3', N + '/bin/inject.py', '--serve'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=open(LOG, 'a'))
             st = {}; t = threading.Thread(target=lambda: st.__setitem__('l', p.stdout.readline().decode().strip()), daemon=True); t.start(); t.join(12)
@@ -699,7 +702,7 @@ class Daemon:
                 continue
             try: self.phrase(audio, sess, ph)
             except Exception as e:
-                log('phrase error', repr(e)); self.error('Could not type that phrase')
+                log('phrase error', repr(e)); self.error(str(e) if isinstance(e, NotReady) else 'Could not type that phrase')
             finally:
                 self.pending -= 1; self.q.task_done()
 

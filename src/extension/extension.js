@@ -320,7 +320,8 @@ export default class VoiceTypingOverlay extends Extension {
         if (gpuMissing) box.add_child(note('The graphics-card engine needs these system packages, and they are not installed: ' + d.missing_gpu.join(', ') + '. ' +
             'The processor (CPU) engine works fine without them, but the graphics-card version can\'t be built or used until they are installed.'));
         else if (!d.engine_built && d.gpu !== false && !d.missing.length) box.add_child(note('All packages are here; the graphics-card engine just has to be built (a few minutes). The processor engine keeps working meanwhile.'));
-        if (typMissing) box.add_child(note('Also missing: ' + d.missing_typing.join(', ') + '. Without it, GNOME asks for remote-control permission before typing.'));
+        if (typMissing) box.add_child(note('Typing: ' + d.missing_typing.join(', ') + ' is not installed. It types the words into your window; without it nothing gets typed.'));
+        if (d.missing_perm) box.add_child(note('Typing permission: a one-time system rule that lets the app use the virtual keyboard (/dev/uinput). Without it nothing gets typed.'));
         if (noiseMissing) box.add_child(note('Noise suppression: ' + d.missing_noise.join(', ') + ' is not installed. Dictation works without it, but background noise is not filtered out.'));
         if (pipMissing) box.add_child(note('Better voice detection: ' + d.missing_pip.join(', ') + ' (Python packages for the app, no password needed). Without them a simpler loudness-based detector is used.'));
         if (busy) {
@@ -337,7 +338,8 @@ export default class VoiceTypingOverlay extends Extension {
         if (d.pkexec || !d.missing.length) r.add_child(this._pill(job === 'failed' ? 'Try again' : 'Install', 'primary', () => this._depsInstall()));
         r.add_child(this._pill('Not now', 'plain', () => this._depsNotNow()));
         box.add_child(r);
-        if (d.missing.length && d.pkexec) box.add_child(note('Install asks for your password, then runs: ' + d.command_text.replace(/^pkexec /, ''), 'rgba(255,255,255,0.55)', 8.5));
+        if (d.missing.length && d.pkexec) box.add_child(note('Install asks for your password once' + (d.missing_perm ? ', installs ' + d.missing.join(' ') + ' and the typing rule.' : ', then runs: ' + d.command_text.replace(/^pkexec /, '')), 'rgba(255,255,255,0.55)', 8.5));
+        else if (d.missing_perm && d.pkexec) box.add_child(note('Install asks for your password once, then adds the typing rule.', 'rgba(255,255,255,0.55)', 8.5));
         if (pipMissing) box.add_child(note('and downloads into the app: pip install ' + d.missing_pip.join(' '), 'rgba(255,255,255,0.55)', 8.5));
         return box;
     }

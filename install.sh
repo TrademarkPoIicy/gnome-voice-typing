@@ -35,7 +35,7 @@ usage: ./install.sh [options]
   --binding ACCEL    keyboard shortcut (default '<Super>h'; e.g. '<Super><Alt>h')
   --no-keybinding    do not create a keyboard shortcut
   --no-system-deps   do not install distro packages (you must have them already)
-  --no-udev          do not install the /dev/uinput udev rule (typing then needs GNOME's remote-control portal)
+  --no-udev          do not install the /dev/uinput udev rule (set it up later from Settings > Setup & uninstall)
   --no-autostart     do not start the background service at login
   --no-start         do not start the background service now
   --skip-gnome       do not touch GNOME settings or install the extension (containers / headless testing)
@@ -306,7 +306,7 @@ fi
 step "7/10 Permission to type into other windows (/dev/uinput)"
 RULE=/etc/udev/rules.d/70-$APP-uinput.rules; MODLOAD=/etc/modules-load.d/$APP-uinput.conf
 if [ -w /dev/uinput ] 2>/dev/null; then ok "/dev/uinput is already writable for you; nothing to do."
-elif [ "$NO_UDEV" = 1 ]; then warn "--no-udev: skipped. Typing will use GNOME's remote-control portal instead (a one-time permission prompt and a screen-sharing-style indicator)."
+elif [ "$NO_UDEV" = 1 ]; then warn "--no-udev: skipped. Nothing gets typed until this is set up: press Install in Settings > Setup & uninstall (asks for your password once)."
 else
   cat <<EOT
     To type the recognised words into the window you are using, the program creates a virtual keyboard through /dev/uinput (via ydotool).
@@ -321,7 +321,7 @@ EOT
       if $SUDO install -m 644 "$SRC/src/system/70-$APP-uinput.rules" "$RULE" && echo uinput | $SUDO tee "$MODLOAD" >/dev/null && $SUDO modprobe uinput && $SUDO udevadm control --reload && $SUDO udevadm trigger --name-match=uinput --action=add; then
         state_set udev '{"rule": "'"$RULE"'", "modules_load": "'"$MODLOAD"'"}'; sleep 1
         [ -w /dev/uinput ] && ok "/dev/uinput is now usable by you." || warn "Rule installed, but /dev/uinput is not writable yet; you may need to log out and in again."
-      else warn "Could not install the udev rule. Typing will use the remote-control portal."; fi
+      else warn "Could not install the udev rule. Press Install in Settings > Setup & uninstall to try again."; fi
     fi
   else warn "Skipped. Typing will use GNOME's remote-control portal."; fi
 fi

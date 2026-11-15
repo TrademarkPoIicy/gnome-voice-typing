@@ -19,6 +19,7 @@ A model counts as installed only when EVERY file listed in the registry exists w
 (models/.installed/<id>.json, written after the SHA-256 check) matches the registry. Downloads are staged in models/.dl/<id>/
 (*.part, resumable) and moved into place only when complete, so a half-downloaded model never sits in the models folder.
 """
+import shlex
 import hashlib, importlib.util, json, os, shutil, signal, socket, subprocess, sys, tarfile, time, urllib.request, urllib.error
 
 N = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -435,6 +436,20 @@ def ydotool_ok():
         try: r = subprocess.run(['ydotoold', '--help'], capture_output=True, text=True, timeout=5); return '--socket-path' in (r.stdout + r.stderr)
         except Exception: return False
     return os.access(N + '/ext/bin/ydotoold', os.X_OK)
+UINPUT_RULE = '/etc/udev/rules.d/70-gnome-voice-typing-uinput.rules'; UINPUT_LOAD = '/etc/modules-load.d/gnome-voice-typing-uinput.conf'
+def uinput_ok(): return os.access('/dev/uinput', os.W_OK)
+def _uinput_script():
+    rule = open(N + '/data/70-gnome-voice-typing-uinput.rules').read() if os.path.exists(N + '/data/70-gnome-voice-typing-uinput.rules') else \
+        'KERNEL=="uinput", SUBSYSTEM=="misc", OPTIONS+="static_node=uinput", TAG+="uaccess"\n'
+    return ("printf %%s %s > %s && chmod 644 %s && echo uinput > %s && modprobe uinput && udevadm control --reload && udevadm trigger --name-match=uinput --action=add"
+            % (shlex.quote(rule), UINPUT_RULE, UINPUT_RULE, UINPUT_LOAD))
+def _record_udev():
+    p = N + '/install-state.json'
+    try: d = json.load(open(p))
+    except Exception: d = {}
+    d['udev'] = {'rule': UINPUT_RULE, 'modules_load': UINPUT_LOAD}
+    try: json.dump(d, open(p, 'w'), indent=1)
+    except Exception: pass
 def rnnoise_ok():
     import ctypes
     try: ctypes.CDLL('librnnoise.so.0'); return True
@@ -458,14 +473,17 @@ def deps_status():
     miss_noise = [] if (rnnoise_ok() or not q) else [p for p in spec.get('noise', []) if not _pkg_installed(q, p)]
     miss_pip = vad_pip_missing()
     missing = sorted(set(miss_gpu + miss_typ + miss_noise))
+    perm = not uinput_ok()      # the virtual keyboard (/dev/uinput) is root-only: typing needs the one-time udev rule
     cmd = (['pkexec'] + spec['install'] + missing) if (missing and spec) else []
-    try: dismissed = json.load(open(DISMISS)).get('missing') == missing + miss_pip
+    if perm and shutil.which('pkexec'):
+        cmd = ['pkexec', 'sh', '-c', ((shlex.join(spec['install'] + missing) + ' && ') if (missing and spec) else '') + _uinput_script()]
+    try: dismissed = json.load(open(DISMISS)).get('missing') == missing + miss_pip + (['uinput'] if perm else [])
     except Exception: dismissed = False
     s = read_status(DEPS_ID)
-    return {'pm': pm, 'gpu': gpu, 'engine_built': built, 'missing_gpu': miss_gpu, 'missing_typing': miss_typ, 'missing_noise': miss_noise, 'missing_pip': miss_pip,
-            'missing': missing, 'total': len(missing) + len(miss_pip),
-            'pkexec': bool(shutil.which('pkexec')), 'command': cmd, 'command_text': ' '.join(cmd), 'manual': ('sudo ' + ' '.join(spec['install'] + missing)) if (missing and spec) else '',
-            'needed': bool(missing) or bool(miss_pip) or (gpu is not False and not built and not miss_gpu and bool(q)),
+    return {'pm': pm, 'gpu': gpu, 'engine_built': built, 'missing_gpu': miss_gpu, 'missing_typing': miss_typ, 'missing_noise': miss_noise, 'missing_pip': miss_pip, 'missing_perm': perm,
+            'missing': missing, 'total': len(missing) + len(miss_pip) + (1 if perm else 0),
+            'pkexec': bool(shutil.which('pkexec')), 'command': cmd, 'command_text': ' '.join(cmd), 'manual': ('sudo ' + ' '.join(spec['install'] + missing)) if (missing and spec) else ('./install.sh (step 7)' if perm else ''),
+            'needed': bool(missing) or bool(miss_pip) or perm or (gpu is not False and not built and not miss_gpu and bool(q)),
             'dismissed': dismissed, 'job': s}
 def deps_install():
     """Installs the missing packages (pkexec = the desktop's password prompt), then builds the graphics-card engine
@@ -479,16 +497,21 @@ def deps_install():
         print('  ' + msg, flush=True)
     try:
         d = deps_status()
-        if d['missing']:
-            if not d['pm']: raise Fail("Your distribution's package manager isn't supported. Install these yourself: " + ' '.join(d['missing']))
+        if d['missing'] or d['missing_perm']:
+            if d['missing'] and not d['pm']: raise Fail("Your distribution's package manager isn't supported. Install these yourself: " + ' '.join(d['missing']))
             if not d['pkexec']: raise Fail('No graphical password prompt (pkexec) is available. Run this in a terminal instead:  ' + d['manual'])
-            st('installing', 'Waiting for your password, then installing %d package%s...' % (len(d['missing']), 's' if len(d['missing']) != 1 else ''))
+            st('installing', ('Waiting for your password, then installing %d package%s...' % (len(d['missing']), 's' if len(d['missing']) != 1 else '')) if d['missing']
+               else 'Waiting for your password to allow typing...')
             if d['pm'] == 'apt': subprocess.run(['pkexec', 'apt-get', 'update'], stdin=subprocess.DEVNULL)
             p = subprocess.run(d['command'], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
             if p.returncode in (126, 127): raise Fail('The password prompt was cancelled, so nothing was installed. Press Install to try again.')
             if p.returncode:
                 print(p.stdout[-1500:], file=sys.stderr)
                 raise Fail('Installing the packages failed. You can run it in a terminal to see why:  ' + d['manual'])
+            if d['missing_perm']:
+                time.sleep(1)
+                if uinput_ok(): _record_udev()
+                else: raise Fail('Typing permission was added, but it only takes effect after you log out and back in.')
         if d['missing_pip']:
             st('installing', 'Downloading the voice-detection packages (%s)...' % ', '.join(d['missing_pip']))
             py = N + '/venv/bin/python'; py = py if os.path.exists(py) else sys.executable
@@ -535,7 +558,7 @@ def deps_dismiss(on=True):
         except OSError: pass
         return
     os.makedirs(os.path.dirname(DISMISS), exist_ok=True)
-    d = deps_status(); json.dump({'missing': d['missing'] + d['missing_pip'], 't': time.strftime('%F %T')}, open(DISMISS, 'w'))
+    d = deps_status(); json.dump({'missing': d['missing'] + d['missing_pip'] + (['uinput'] if d['missing_perm'] else []), 't': time.strftime('%F %T')}, open(DISMISS, 'w'))
 
 # ---------------------------------------------------------------- reporting
 def entry_state(mid):

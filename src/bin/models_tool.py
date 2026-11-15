@@ -274,7 +274,7 @@ def install(mid, dry=False, force=False):
             if free < need: raise Fail('Not enough free disk space: this model needs about %s and %s is free.' % (human(need), human(free)))
         if setup_needed(mid) == 'engine':
             miss = engine_tools_missing()
-            if miss: raise Fail("The graphics-card engine isn't built yet and its build tools are missing (%s). Re-run install.sh, or install them and press Retry." % ', '.join(miss))
+            if miss: raise Fail("The graphics-card engine isn't built yet and its build tools are missing (%s). Open Settings and choose System packages, or install them and press Retry." % ', '.join(miss))
         if st == 'unverified' and not force:
             job.set('verifying', 'Checking the files already on disk...')
             ok, bad = verify_files(mid, job, delete_bad=True)

@@ -10,7 +10,7 @@ the text box you are typing in.
 - **Good accuracy.** The default model is NVIDIA Parakeet-TDT 0.6B, which adds punctuation and capital letters by itself.
 - **Not tied to one GPU brand.** The GPU engine uses Vulkan (AMD, Intel, NVIDIA with a Vulkan driver). No CUDA or ROCm needed.
 
-> Status: 0.1.0, first public release. Tested on Fedora 45 with GNOME Shell 51 (Wayland) and a Radeon GPU. Debian/Ubuntu and Arch
+> Status: 0.1.2. Tested on Fedora 45 with GNOME Shell 51 (Wayland) and a Radeon GPU. Debian/Ubuntu and Arch
 > support is implemented in the installer but has had less testing. Please report problems.
 
 ## Features
@@ -23,6 +23,11 @@ the text box you are typing in.
 - Settings (gear icon): model picker with a clear Light / Medium / Heavy system-impact tag, **Run on: graphics card or processor**
   (if one fails to load, the other is used automatically), pause after silence (10 s / 30 s / 1 min / 2 min / never), microphone,
   sounds on/off.
+- **Missing build tools are explained.** The first time the bar or Settings opens, if the graphics-card build packages or ydotool
+  were not installed, a prompt lists exactly what is missing. **Install** asks with the normal graphical password window, then builds
+  the graphics-card engine and switches to it. **Not now** keeps the processor version (it works without those packages) and does not
+  ask again at startup; Settings → System packages opens the prompt later. With no Vulkan graphics card, the graphics-card build is
+  not offered.
 - Many models: Parakeet v3 (GPU) and v2 (CPU), Whisper (tiny to large-v3-turbo, GPU and CPU), Moonshine. **One-click installs:** the
   installer downloads just one default model; every model is always listed in the settings panel, and **Download** (with its size)
   fetches, checksum-verifies and installs it, with a progress bar and Cancel. Installed models show **Uninstall** (not available for
@@ -43,13 +48,13 @@ The installer installs missing system packages for you (Fedora/dnf, Debian and U
 ## Install
 
 ```sh
-tar xzf gnome-voice-typing-0.1.0.tar.gz
-cd gnome-voice-typing-0.1.0
+tar xzf gnome-voice-typing-0.1.2.tar.gz
+cd gnome-voice-typing-0.1.2
 ./install.sh --dry-run     # optional: shows everything it would do, changes nothing
 ./install.sh
 ```
 
-Verify the download first if you like: `sha256sum -c gnome-voice-typing-0.1.0.tar.gz.sha256`.
+Verify the download first if you like: `sha256sum -c gnome-voice-typing-0.1.2.tar.gz.sha256`.
 
 **Then log out and log back in** (once). On Wayland, GNOME Shell only loads a new extension at login.
 
@@ -74,7 +79,9 @@ See `./install.sh --help`. Re-running the installer is safe: it upgrades the pro
 
 ### Why `sudo`? (and what changes system-wide)
 
-Only two things need administrator rights, and both are optional:
+Only two things need administrator rights, and both are optional. The installer asks in the terminal (`sudo`) before either of them.
+If you skipped the packages, the voice-typing bar can install that same list later with `pkexec` (the desktop's graphical password
+window). It never runs sudo on its own.
 
 1. **Distro packages** (`dnf` / `apt` / `pacman install ...`): the tools listed above. You can install them yourself and use `--no-system-deps`.
 2. **The `/dev/uinput` rule.** To type into other windows the program creates a virtual keyboard with `ydotool`, which needs write
@@ -140,6 +147,9 @@ are left alone. Log out and in afterwards so GNOME Shell forgets the extension.
   on (e.g. `--force-renderer-accessibility`); otherwise the bar falls back to the bottom of the window.
 - **"Graphics card unavailable, using processor".** The Vulkan engine could not start; the CPU model is used and your choice is kept so
   the next start tries again. Check `vulkaninfo --summary` and `~/.local/state/gnome-voice-typing/daemon.log`.
+- **"Set up the graphics-card version?"** The build tools or ydotool were not installed. **Install** asks for your password in the
+  normal graphical window, then builds the engine. **Not now** stays on the processor; open it again from the gear menu under
+  **System packages**. Closing the password window installs nothing. With no Vulkan graphics card that build is not offered.
 - **The GPU build failed.** Logs are in `~/.cache/gnome-voice-typing/build/`. Install the build packages listed above and run `./install.sh --gpu` again, or use `--cpu-only`.
 - **Wrong microphone.** Pick one in the gear panel (or leave it on *System default*).
 - **Download interrupted.** Run `./install.sh` again; downloads resume and are re-verified.
@@ -152,7 +162,7 @@ while you dictate. Audio is processed in memory and never written to disk; typed
 by `install.sh` and `voice-typing-models`: distro package servers, PyPI, GitHub (whisper.cpp source; model archives) and Hugging Face (models),
 all over HTTPS, with SHA-256 / commit-id verification. The program itself does not contact any server.
 
-## Limitations (0.1.0)
+## Limitations (0.1.2)
 
 - GNOME Shell only (it is a Shell extension); tested on Wayland. Not for KDE, Xfce, etc.
 - English is the best-supported language; Parakeet v3 also handles other European languages, the `.en` Whisper models are English only.
@@ -175,7 +185,7 @@ Full details and links: [`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md). Th
 ## Development
 
 - `scripts/make-tarball.sh` builds `dist/gnome-voice-typing-<version>.tar.gz` and its `.sha256`.
-- `tests/` has the isolated install tests (a private session bus, runtime dir and config backend, never your real settings).
+- `tests/test_system_deps.py` checks the first-launch package prompt (no root, nothing is installed). `tests/` also has the isolated install tests (a private session bus, runtime dir and config backend, never your real settings).
   `GVT_DRY_RUN=1` makes the daemon log what it would type instead of typing (developer option).
 - Layout: `src/bin` (daemon, CLI, model manager), `src/extension` (GNOME Shell extension), `src/gpu` (Vulkan backend + C shim),
   `src/data` (model catalog and checksummed registry), `src/lib` (GNOME settings helper), `src/system` (udev rule).

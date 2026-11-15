@@ -42,6 +42,9 @@ export default class VoiceTypingOverlay extends Extension {
         this._field = null; this._target = null; this._followId = 0; this._fsTimer = 0; this._focusSig = 0; this._userMoved = false;
         // one-click model downloads: catalog (every model + its state) comes from `voice-typing-models status --json`, progress from models/.status/<id>.json
         this._cat = null; this._dlW = {}; this._pend = {}; this._confirm = ''; this._note = {}; this._dlTimer = 0; this._catTimer = 0; this._adopted = false; this._catSig = ''; this._scrollKeep = 0;
+        // first-launch package prompt (graphics-card build tools + ydotool). Shown once; Settings can open it again.
+        this._deps = null; this._depsOffered = false; this._depsDlg = null; this._depsTimer = 0; this._depsBusy = false;
+        this._depsJob = null; this._depsSig = ''; this._depsMode = ''; this._depsPhaseShown = '';
 
         // ---- main bar ----
         this._bar = new St.BoxLayout({
@@ -98,13 +101,15 @@ export default class VoiceTypingOverlay extends Extension {
                 import(`file://${this.path}/caret.js`).then(m => { try { m.init(); } catch (e) {} if (this._bar) { this._caret = m; try { m.setFocusCallback(() => this._focusPoke()); } catch (e) {} } else { try { m.destroy(); } catch (e) {} } }).catch(() => {});
             });
         GLib.file_set_contents(DIR + '/ready', '1');
+        this._refreshDeps();
     }
 
     disable() {
         this._dragEnd(false); this._stopFollow(); this._locTok++;
         if (this._caret) { try { this._caret.setFocusCallback(null); } catch (e) {} try { this._caret.destroy(); } catch (e) {} this._caret = null; }
         if (this._monId) { this._mon.disconnect(this._monId); this._mon.cancel(); this._monId = 0; }
-        for (const k of ['_watch', '_spinId', '_saveTimer', '_readyTimer', '_panelIdle', '_dlTimer', '_catTimer']) if (this[k]) { GLib.source_remove(this[k]); this[k] = 0; }
+        for (const k of ['_watch', '_spinId', '_saveTimer', '_readyTimer', '_panelIdle', '_dlTimer', '_catTimer', '_depsTimer']) if (this[k]) { GLib.source_remove(this[k]); this[k] = 0; }
+        if (this._depsDlg) { Main.layoutManager.removeChrome(this._depsDlg); this._depsDlg.destroy(); this._depsDlg = null; }
         try { Gio.File.new_for_path(DIR + '/ready').delete(null); } catch (e) {}
         for (const a of [this._bar, this._panel]) if (a) { Main.layoutManager.removeChrome(a); a.destroy(); }
         this._bar = this._panel = null;
@@ -186,6 +191,7 @@ export default class VoiceTypingOverlay extends Extension {
             const m = JSON.parse(new TextDecoder().decode(bytes));
             const first = !this._models;
             this._models = m;
+            if (first) this._refreshDeps();
             if (first || !this._panelOpen) this._syncSel();
             if (this._panelOpen) this._buildPanel();
         } catch (e) {}
@@ -466,7 +472,7 @@ export default class VoiceTypingOverlay extends Extension {
             this._moveTo(x, y, false);
             this._bar.translation_y = slide;
             this._bar.ease({opacity: 255, translation_y: 0, duration: 170, mode: Clutter.AnimationMode.EASE_OUT_QUAD});
-            this._startFollow(); this._geomSoon();
+            this._startFollow(); this._geomSoon(); this._maybeDepsPrompt();
         });
     }
     // while visible: re-probe on window-focus change and every few seconds; move ONLY if the focused field is a different one
@@ -649,6 +655,7 @@ export default class VoiceTypingOverlay extends Extension {
         if (!this._placed) { this._startPlacement(); return; }   // bar stays hidden until it knows where to go (<= ~0.4 s)
         this._bar.visible = true;
         if (this._bar.opacity < 255) { this._bar.remove_all_transitions(); this._bar.ease({opacity: 255, duration: 120, mode: Clutter.AnimationMode.EASE_OUT_QUAD}); }
+        this._maybeDepsPrompt();
     }
     _hide() {
         if (this._placed || this._state !== 'hidden') this._log('hide', `userMoved=${this._userMoved} dragPos=${JSON.stringify(this._dragPos || null)} -> cleared`);
@@ -674,6 +681,7 @@ export default class VoiceTypingOverlay extends Extension {
         if (this._saveTimer) { GLib.source_remove(this._saveTimer); this._saveTimer = 0; }
         this._confirm = ''; this._note = {}; this._scrollKeep = 0; this._panelOpen = true; this._buildPanel(); this._refreshCat();
         this._panel.visible = true; this._panel.reactive = true; this._placePanel(); this._geomSoon();
+        this._refreshDeps(); this._maybeDepsPrompt();
         this._panel.remove_all_transitions(); this._panel.ease({opacity: 255, duration: 120, mode: Clutter.AnimationMode.EASE_OUT_QUAD});
     }
     _closePanel() {
@@ -881,6 +889,17 @@ export default class VoiceTypingOverlay extends Extension {
         }, () => { this._sel.sounds = !this._sel.sounds; this._buildPanel(); });
         dim(sw); P.add_child(sw); this._soundRow = sw;
 
+        // way back to the package prompt after "Not now" (hidden when nothing is missing)
+        if (this._deps && this._deps.needs_attention && this._deps.presentation) {
+            P.add_child(sect('System packages'));
+            const line = wrapLbl(lbl(this._deps.presentation.settings_line || 'Packages for the graphics card or for typing are missing.', 10.5, SEC));
+            line.style += ' padding: 2px 2px 6px 2px;';
+            P.add_child(line);
+            const review = new St.BoxLayout({style: 'spacing: 8px;'});
+            review.add_child(this._pill(this._deps.presentation.settings_button || 'Review', 'primary', () => this._openDepsDialog()));
+            P.add_child(review);
+        }
+
         // footer: status (spinner / ready / error) + Save
         const foot = new St.BoxLayout({style: 'padding-top: 14px; spacing: 10px;'});
         this._panelSpin = this._mkSpinner(18);
@@ -955,5 +974,224 @@ export default class VoiceTypingOverlay extends Extension {
             this._buildPanel(); this._apply(this._state, 0, '', false);
         } else this._refreshSave();
         if (Object.keys(payload).length) this._cli(['--apply', JSON.stringify(payload)]);
+    }
+
+    // ---------- missing system packages (first launch, and again from Settings) ----------
+    // Detection and pkexec live in bin/system-deps. The bar only draws what that program reports.
+    _depsBin() {
+        const via = this._toolPath('system-deps');
+        if (via && GLib.file_test(via, GLib.FileTest.IS_EXECUTABLE)) return via;
+        const fallback = GLib.get_user_data_dir() + '/gnome-voice-typing/bin/system-deps';
+        return GLib.file_test(fallback, GLib.FileTest.IS_EXECUTABLE) ? fallback : null;
+    }
+    _spawnDeps(args) {
+        const bin = this._depsBin(); if (!bin) return false;
+        try { Gio.Subprocess.new([bin, ...args], Gio.SubprocessFlags.STDOUT_SILENCE | Gio.SubprocessFlags.STDERR_SILENCE); return true; }
+        catch (e) { return false; }
+    }
+    _refreshDeps() {
+        const bin = this._depsBin(); if (!bin) return;
+        let p;
+        try { p = Gio.Subprocess.new([bin, 'status'], Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_SILENCE); }
+        catch (e) { return; }
+        p.communicate_utf8_async(null, null, (pr, res) => {
+            try {
+                if (!this._bar) return;
+                const [, out] = pr.communicate_utf8_finish(res);
+                if (!pr.get_successful()) return;
+                const d = JSON.parse(out);
+                const sig = (d.presentation && d.presentation.settings_line) || '';
+                const changed = !this._deps || sig !== this._depsSig;
+                this._deps = d; this._depsSig = sig;
+                if (changed && this._panelOpen) this._buildPanel();
+                if (this._depsDlg && this._depsMode === 'prompt') this._paintDepsPrompt();
+                this._maybeDepsPrompt();
+            } catch (e) {}
+        });
+    }
+    _readDepsJob() {
+        try {
+            const [ok, bytes] = GLib.file_get_contents(DIR + '/deps-job.json');
+            if (!ok || !bytes.length) return null;
+            return JSON.parse(new TextDecoder().decode(bytes));
+        } catch (e) { return null; }
+    }
+    _maybeDepsPrompt() {
+        const d = this._deps;
+        if (!d || !d.should_auto_prompt || this._depsOffered || this._depsDlg) return;
+        const barUp = this._bar && this._bar.visible;
+        if (!barUp && !this._panelOpen) return;
+        this._depsOffered = true;
+        d.prompted = true; d.should_auto_prompt = false;
+        this._spawnDeps(['mark-prompted']);
+        this._openDepsDialog();
+    }
+    _depsPhaseLive(job) {
+        if (!job || !['installing', 'building', 'downloading', 'switching'].includes(job.phase)) return false;
+        // a crashed install leaves the last phase in the job file; a dead pid means it is not still running
+        if (job.pid && !GLib.file_test('/proc/' + job.pid, GLib.FileTest.EXISTS)) return false;
+        return true;
+    }
+    _openDepsDialog() {
+        let job = this._readDepsJob();
+        if (job && job.pid && !this._depsPhaseLive(job) && ['installing', 'building', 'downloading', 'switching'].includes(job.phase))
+            job = {phase: 'error', message: 'The install stopped before it finished. Voice typing stays on the processor.', detail: ''};
+        const live = this._depsPhaseLive(job);
+        this._ensureDepsDialog();
+        this._depsDlg.visible = true; this._depsDlg.opacity = 255;
+        if (live) { this._depsJob = job; this._depsBusy = true; this._paintDepsProgress(job); this._depsPollStart(); }
+        else if (job && job.phase === 'error') { this._depsJob = job; this._paintDepsProgress(job); }
+        else this._paintDepsPrompt();
+        this._placeDeps();
+    }
+    _closeDepsDialog() {
+        if (!this._depsDlg) return;
+        const dlg = this._depsDlg;
+        this._depsDlg = null; this._depsMode = ''; this._depsPhaseShown = '';
+        this._depsPhaseLabel = this._depsDetailLabel = this._depsSpin = null;
+        Main.layoutManager.removeChrome(dlg); dlg.destroy();
+        this._writeGeom();
+    }
+    _depsNotNow() {
+        this._spawnDeps(['dismiss']);
+        if (this._deps) { this._deps.dismissed = true; this._deps.prompted = true; this._deps.should_auto_prompt = false; }
+        this._closeDepsDialog();
+        if (this._panelOpen) this._buildPanel();
+    }
+    _depsCloseX() {
+        const phase = this._depsJob && this._depsJob.phase;
+        if (phase === 'done' || (phase && ['installing', 'building', 'downloading', 'switching'].includes(phase))) { this._closeDepsDialog(); return; }
+        this._depsNotNow();
+    }
+    _depsInstall() {
+        const phase = this._depsJob && this._depsJob.phase;
+        if (this._depsBusy && phase && ['installing', 'building', 'downloading', 'switching'].includes(phase)) return;
+        const bin = this._depsBin(); if (!bin) return;
+        this._depsBusy = true;
+        const setsid = GLib.find_program_in_path('setsid');
+        try {
+            Gio.Subprocess.new(setsid ? [setsid, '-f', bin, 'install'] : [bin, 'install'],
+                Gio.SubprocessFlags.STDOUT_SILENCE | Gio.SubprocessFlags.STDERR_SILENCE);
+        } catch (e) { this._depsBusy = false; return; }
+        this._depsJob = {phase: 'installing', message: 'Installing packages… a password window should open. Close that window to cancel.', detail: ''};
+        this._paintDepsProgress(this._depsJob);
+        this._depsPollStart();
+    }
+    _depsCancel() { this._spawnDeps(['cancel']); }
+    _depsPollStart() {
+        if (this._depsTimer) return;
+        this._depsTimer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 400, () => {
+            if (!this._bar) { this._depsTimer = 0; return GLib.SOURCE_REMOVE; }
+            let job = this._readDepsJob();
+            if (job && job.pid && !this._depsPhaseLive(job) && ['installing', 'building', 'downloading', 'switching'].includes(job.phase))
+                job = {phase: 'error', message: 'The install stopped before it finished. Voice typing stays on the processor.', detail: '', cancelled: true};
+            if (job) this._depsJob = job;
+            const phase = this._depsJob && this._depsJob.phase;
+            const live = this._depsPhaseLive(this._depsJob);
+            if (this._depsDlg && (live || phase === 'error' || phase === 'done')) this._paintDepsProgress(this._depsJob);
+            if (this._depsSpin && live) this._depsSpin.rotation_angle_z = (this._depsSpin.rotation_angle_z + 24) % 360;
+            if (!live) {
+                this._depsTimer = 0; this._depsBusy = false;
+                if (phase === 'done' || phase === 'error') this._refreshDeps();
+                return GLib.SOURCE_REMOVE;
+            }
+            return GLib.SOURCE_CONTINUE;
+        });
+    }
+    _ensureDepsDialog() {
+        if (this._depsDlg) return;
+        const dlg = new St.BoxLayout({
+            orientation: Clutter.Orientation.VERTICAL, reactive: true, can_focus: false, visible: false, width: 480,
+            style: `background-color: ${PANEL_BG}; border: 1px solid rgba(255,255,255,0.10); border-radius: 14px; padding: 16px 18px 16px 18px; spacing: 8px; ` +
+                   `box-shadow: 0 12px 36px rgba(0,0,0,0.60); ${FONT}`,
+        });
+        const head = new St.BoxLayout({style: 'spacing: 8px;'});
+        this._depsTitle = lbl('', 14, '#fff', 'bold'); this._depsTitle.x_expand = true; this._depsTitle.y_align = Clutter.ActorAlign.CENTER;
+        head.add_child(this._depsTitle);
+        head.add_child(this._iconButton('window-close-symbolic', 16, true, () => this._depsCloseX()));
+        dlg.add_child(head);
+        this._depsBody = new St.BoxLayout({orientation: Clutter.Orientation.VERTICAL, x_expand: true, style: 'spacing: 8px;'});
+        dlg.add_child(this._depsBody);
+        this._depsButtons = new St.BoxLayout({style: 'spacing: 8px; padding-top: 6px;'});
+        dlg.add_child(this._depsButtons);
+        this._depsDlg = dlg;
+        Main.layoutManager.addChrome(dlg, {trackFullscreen: false});
+    }
+    _paintDepsPrompt() {
+        const d = this._deps || {}, p = d.presentation || {};
+        this._ensureDepsDialog();
+        this._depsMode = 'prompt'; this._depsPhaseShown = '';
+        this._depsTitle.text = p.title || 'System packages';
+        this._depsBody.destroy_all_children(); this._depsButtons.destroy_all_children();
+        this._depsPhaseLabel = this._depsDetailLabel = this._depsSpin = null;
+        const job = this._readDepsJob();
+        if (job && job.phase === 'error' && job.message) this._depsBody.add_child(wrapLbl(lbl(job.message, 10.5, '#ff9a9c')));
+        for (const para of (p.paragraphs || [])) this._depsBody.add_child(wrapLbl(lbl(para, 10.5, 'rgba(255,255,255,0.90)')));
+        for (const g of (p.groups || [])) {
+            this._depsBody.add_child(lbl(g.title, 10.5, '#fff', 'bold'));
+            for (const name of (g.packages || [])) this._depsBody.add_child(lbl('•  ' + name, 11, '#fff'));
+        }
+        if (p.manual_command && !d.pkexec) {
+            const cmd = wrapLbl(lbl(p.manual_command, 10, ACCENT));
+            cmd.style += ' padding: 6px 8px; border-radius: 6px; background-color: rgba(0,0,0,0.28);';
+            this._depsBody.add_child(cmd);
+        }
+        if (p.footnote) this._depsBody.add_child(wrapLbl(lbl(p.footnote, 9.5, SEC)));
+        this._depsButtons.add_child(this._pill(p.install_label || 'Install', 'primary', () => this._depsInstall()));
+        this._depsButtons.add_child(this._pill(p.not_now_label || 'Not now', 'plain', () => this._depsNotNow()));
+        this._placeDeps();
+    }
+    _paintDepsProgress(job) {
+        this._ensureDepsDialog();
+        const phase = (job && job.phase) || 'installing';
+        const fresh = this._depsMode !== 'progress';
+        this._depsMode = 'progress';
+        const titles = {
+            installing: 'Installing packages', building: 'Building', downloading: 'Downloading the model',
+            switching: 'Switching to the graphics card', done: 'Finished', error: 'Could not finish',
+        };
+        this._depsTitle.text = titles[phase] || 'Working';
+        if (fresh) {
+            this._depsBody.destroy_all_children();
+            const row = new St.BoxLayout({style: 'spacing: 10px;'});
+            // not _mkSpinner: that list is cleared whenever the settings panel rebuilds, and a destroyed spinner in it throws
+            this._depsSpin = new St.Widget({width: 18, height: 18, y_align: Clutter.ActorAlign.CENTER,
+                style: `border: 3px solid rgba(255,255,255,0.18); border-top-color: ${ACCENT}; border-radius: 18px;`});
+            this._depsSpin.set_pivot_point(0.5, 0.5);
+            row.add_child(this._depsSpin);
+            this._depsPhaseLabel = wrapLbl(lbl('', 11, '#fff')); this._depsPhaseLabel.y_align = Clutter.ActorAlign.CENTER;
+            row.add_child(this._depsPhaseLabel);
+            this._depsBody.add_child(row);
+            this._depsDetailLabel = wrapLbl(lbl('', 9.5, SEC));
+            this._depsBody.add_child(this._depsDetailLabel);
+            this._depsPhaseShown = '';
+        }
+        const live = ['installing', 'building', 'downloading', 'switching'].includes(phase);
+        if (this._depsSpin) this._depsSpin.visible = live;
+        if (this._depsPhaseLabel) {
+            this._depsPhaseLabel.text = (job && job.message) || '';
+            this._depsPhaseLabel.style = `${FONT} font-size: 11pt; color: ${phase === 'error' ? '#ff9a9c' : phase === 'done' ? '#7ddc70' : '#fff'};`;
+        }
+        if (this._depsDetailLabel) this._depsDetailLabel.text = (job && job.detail) || '';
+        if (fresh || this._depsPhaseShown !== phase) {
+            this._depsPhaseShown = phase;
+            this._depsButtons.destroy_all_children();
+            if (live && phase !== 'installing') this._depsButtons.add_child(this._pill('Cancel', 'plain', () => this._depsCancel()));
+            if (phase === 'error') {
+                this._depsButtons.add_child(this._pill('Try again', 'primary', () => this._depsInstall()));
+                this._depsButtons.add_child(this._pill('Not now', 'plain', () => this._depsNotNow()));
+            }
+            if (phase === 'done') this._depsButtons.add_child(this._pill('Done', 'primary', () => this._closeDepsDialog()));
+        }
+        this._placeDeps();
+    }
+    _placeDeps() {
+        if (!this._depsDlg) return;
+        const mon = Main.layoutManager.primaryMonitor, w = 480;
+        let h = 220;
+        try { h = this._depsDlg.get_preferred_height(w)[1] || h; } catch (e) {}
+        if (!mon) { this._depsDlg.set_position(48, 48); return; }
+        this._depsDlg.set_position(Math.round(mon.x + Math.max(MARGIN, (mon.width - w) / 2)),
+                                    Math.round(mon.y + Math.max(MARGIN, (mon.height - h) / 2)));
     }
 }

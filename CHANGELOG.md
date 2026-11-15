@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.2 - 2026-11-15
+
+- **First-launch package prompt.** The first time the bar or Settings opens, missing graphics-card build packages (cmake, glslc, the Vulkan and SPIR-V headers and loader) and ydotool are listed by name. **Install** uses `pkexec` so the desktop shows its usual password window, then builds the graphics-card engine and switches to it, with progress and errors on the prompt. **Not now** keeps the processor version and does not ask again at startup; Settings → System packages opens the same prompt. No Vulkan graphics card: the graphics-card build is not offered. No `pkexec`, or a closed password window: nothing is installed. sudo is never run from the prompt. The package names are the same lists `install.sh` already uses.
+
 ## 0.1.1 - 2026-11-14
 
 - **One-click model installs.** Every model in the catalog is always listed in the settings panel. Not downloaded: a **Download · size** button. Downloading: progress bar and **Cancel**. Failed: a short reason and **Retry**. Installed: an **Uninstall** button with a confirm (the model in use can't be uninstalled; the panel says why). Downloads run in a separate helper process (never inside GNOME Shell) and report progress through `models/.status/<id>.json`.

@@ -127,21 +127,20 @@ esac
 
 # ---------------------------------------------------------------- 2. packages
 step "2/10 System packages"
-# package lists per distro: RUNTIME always; BUILD only for the GPU engine
-case "$PM" in
-  dnf)    RUNTIME="python3 python3-gobject at-spi2-core pipewire-utils pulseaudio-utils wl-clipboard ydotool"; BUILD="git cmake gcc-c++ make ninja-build glslc vulkan-headers vulkan-loader-devel spirv-headers-devel"; GPUPKG="vulkan-tools mesa-vulkan-drivers"; PQ='rpm -q --quiet';;
-  apt)    RUNTIME="python3 python3-venv python3-gi gir1.2-atspi-2.0 pipewire-bin pulseaudio-utils wl-clipboard ydotool"; BUILD="git cmake g++ make ninja-build libvulkan-dev glslc spirv-headers"; GPUPKG="vulkan-tools mesa-vulkan-drivers"; PQ='dpkg -s';;
-  pacman) RUNTIME="python python-gobject at-spi2-core pipewire libpulse wl-clipboard ydotool"; BUILD="git cmake gcc make ninja vulkan-headers vulkan-icd-loader spirv-headers shaderc"; GPUPKG="vulkan-tools"; PQ='pacman -Qi';;
-  *) RUNTIME=""; BUILD=""; GPUPKG=""; PQ=true;;
-esac
+# Package names live in src/data/distro-packages.sh. The in-app Install button reads that same file,
+# so the prompt and this installer cannot drift apart.
+. "$SRC/src/data/distro-packages.sh"
+gvt_distro_packages "$PM"
 # ydotool 1.x is required (--socket-path). Some distros still ship 0.1.x (Ubuntu 24.04, Debian 12): then it is built from source instead.
 YD_BUILD=0
-if [ "$PM" = apt ] && have apt-cache; then
-  YDV="$(apt-cache policy ydotool 2>/dev/null | awk '/Candidate:/ {print $2}')"
-  case "$YDV" in ""|"(none)"|0.*) YD_BUILD=1; RUNTIME="${RUNTIME/ ydotool/}"; say "This distribution packages ydotool ${YDV:-(none)} (too old: 1.x is needed); ydotool 1.0.4 will be built from source (AGPL-3.0).";; esac
+if [ "$PM" = apt ] && gvt_apt_ydotool_is_old; then
+  YD_BUILD=1
+  YDV="$(apt-cache policy ydotool 2>/dev/null | awk '/Candidate:/ {print $2; exit}')"
+  RUNTIME="${RUNTIME/ ydotool/}"
+  say "This distribution packages ydotool ${YDV:-(none)} (too old: 1.x is needed); ydotool 1.0.4 will be built from source (AGPL-3.0)."
 fi
 WANT="$RUNTIME"; [ "$USE_GPU" = 1 ] && WANT="$WANT $BUILD $GPUPKG"
-if [ "$YD_BUILD" = 1 ] && [ "$USE_GPU" != 1 ]; then WANT="$WANT git cmake g++ make"; fi
+if [ "$YD_BUILD" = 1 ] && [ "$USE_GPU" != 1 ]; then WANT="$WANT $YD_SOURCE"; fi
 MISSING=''
 for p in $WANT; do $PQ "$p" >/dev/null 2>&1 || MISSING="$MISSING $p"; done
 MISSING="${MISSING# }"

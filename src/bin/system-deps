@@ -1,0 +1,52 @@
+#!/usr/bin/env python3
+"""System-package helper for the voice-typing bar.
+
+  system-deps status            JSON: what is missing, and the words for the prompt
+  system-deps install           pkexec install, then build the graphics-card engine (progress in the overlay dir)
+  system-deps cancel            stop a running install
+  system-deps dismiss           remember "Not now" (Settings can open the prompt again)
+  system-deps mark-prompted     the automatic prompt has been shown once
+
+Installing packages always goes through pkexec. This program never runs sudo.
+"""
+import json, os, sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'lib'))
+import gvt_deps
+
+
+def status():
+    probe = gvt_deps.SystemProbe()
+    st = gvt_deps.assess(probe)
+    st['presentation'] = gvt_deps.present(st)
+    json.dump(st, sys.stdout, indent=2)
+    sys.stdout.write('\n')
+    return 0
+
+
+def main(argv):
+    cmd = argv[1] if len(argv) > 1 else 'status'
+    if cmd in ('-h', '--help', 'help'):
+        print(__doc__.strip())
+        return 0
+    if cmd == 'status':
+        return status()
+    if cmd == 'dismiss':
+        gvt_deps.update_prefs(dismissed=True, prompted=True)
+        return 0
+    if cmd == 'mark-prompted':
+        gvt_deps.update_prefs(prompted=True)
+        return 0
+    if cmd == 'install':
+        return gvt_deps.cli_install()
+    if cmd == 'cancel':
+        return gvt_deps.cli_cancel()
+    print('usage: system-deps status | install | cancel | dismiss | mark-prompted', file=sys.stderr)
+    return 2
+
+
+if __name__ == '__main__':
+    try:
+        sys.exit(main(sys.argv))
+    except KeyboardInterrupt:
+        sys.exit(130)

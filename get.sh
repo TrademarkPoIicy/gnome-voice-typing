@@ -13,4 +13,4 @@ curl -fsSL "https://codeload.github.com/$REPO/tar.gz/$REF" | tar xz -C "$TMP" --
 cd "$TMP"
 echo "Version $(cat VERSION)"
 # piped through curl | bash, stdin is the script: give the installer's questions the terminal instead
-if [ -t 0 ] || [ ! -r /dev/tty ]; then ./install.sh "$@"; else ./install.sh "$@" < /dev/tty; fi
+if [ ! -t 0 ] && (exec < /dev/tty) 2>/dev/null; then ./install.sh "$@" < /dev/tty; else ./install.sh "$@"; fi

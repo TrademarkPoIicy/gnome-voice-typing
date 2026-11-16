@@ -37,7 +37,7 @@ export default class VoiceTypingOverlay extends Extension {
     enable() {
         GLib.mkdir_with_parents(DIR, 0o700);
         this._state = 'hidden'; this._last = 0; this._info = {}; this._models = null; this._panelOpen = false;
-        this._sel = {model: '', pause: 60, mic: '', sounds: true, dev: 'gpu'}; this._base = Object.assign({}, this._sel);
+        this._sel = {model: '', pause: 60, mic: '', sounds: true, follow: true, dev: 'gpu'}; this._base = Object.assign({}, this._sel);
         this._spinners = []; this._spinId = 0; this._geomKey = ''; this._placed = false; this._dragPos = null; this._curKey = null;
         this._saveState = 'idle'; this._saveTimer = 0; this._readyUntil = 0; this._readyTimer = 0; this._wasLoading = false;
         this._dragging = false; this._capId = 0; this._grab = null; this._panelIdle = 0; this._locTok = 0; this._rawPrev = 'hidden'; this._locating = false; this._following = false;
@@ -198,7 +198,7 @@ export default class VoiceTypingOverlay extends Extension {
     }
     _syncSel() {
         const m = this._models; if (!m) return;
-        this._sel = {model: m.current, pause: m.settings.auto_pause_seconds, mic: m.settings.mic || '', sounds: m.settings.sounds !== false,
+        this._sel = {model: m.current, pause: m.settings.auto_pause_seconds, mic: m.settings.mic || '', sounds: m.settings.sounds !== false, follow: m.settings.follow_field !== false,
                      dev: devOf(this._entries().find(e => e.id === m.current) || (m.models || []).find(e => e.id === m.current) || {device: m.settings.device})};
         this._base = Object.assign({}, this._sel);
     }
@@ -405,7 +405,7 @@ export default class VoiceTypingOverlay extends Extension {
             if (this._bar) { this._catSig = ''; this._refreshCat(); }
         });
     }
-    _dirty() { const a = this._sel, b = this._base; return a.model !== b.model || a.pause !== b.pause || a.mic !== b.mic || a.sounds !== b.sounds; }
+    _dirty() { const a = this._sel, b = this._base; return a.model !== b.model || a.pause !== b.pause || a.mic !== b.mic || a.sounds !== b.sounds || a.follow !== b.follow; }
 
     // ---------- position (drag) ----------
     // The dragged position lives only in this._dragPos for the current open session (cleared by _hide); nothing is saved or reloaded.
@@ -608,6 +608,7 @@ export default class VoiceTypingOverlay extends Extension {
         this._locate(0.25, (f) => {
             this._following = false;
             if (!this._bar || this._state === 'hidden') return;
+            if (this._models && this._models.settings && this._models.settings.follow_field === false) return;   // 'Follow text fields' off: stay put
             if (this._userMoved) return;                                    // dragged: the bar stays where the user put it until dictation closes
             const P = this._plan(f);
             if (P.key === this._curKey) return;                             // same field / same window (the user is typing): never move
@@ -676,6 +677,7 @@ export default class VoiceTypingOverlay extends Extension {
                 if (this._saveBtn) g.save = c(this._saveBtn);
                 if (this._micRow) g.mic = c(this._micRow);
                 if (this._soundRow) g.sounds = c(this._soundRow);
+                if (this._followRow) g.follow = c(this._followRow);
                 g.dev = {}; for (const [k, a] of Object.entries(this._devActors || {})) g.dev[k] = c(a);
                 if (this._panelClose) g.panelClose = c(this._panelClose);
                 if (this._panelBack) g.back = c(this._panelBack);
@@ -876,7 +878,7 @@ export default class VoiceTypingOverlay extends Extension {
     _buildPanel() {
         const m = this._models; if (!m || !this._panel) return;
         const P = this._panel; this._rememberScroll(); P.destroy_all_children(); this._spinners = [this._barSpin]; this._dlW = {};
-        this._rowActors = {}; this._chipActors = {}; this._devActors = {}; this._micRow = this._soundRow = this._listScroll = this._nzFill = null; this._catActors = {};
+        this._rowActors = {}; this._chipActors = {}; this._devActors = {}; this._micRow = this._soundRow = this._followRow = this._listScroll = this._nzFill = null; this._catActors = {};
         const pg = PAGES.some(x => x[0] === this._page) ? this._page : null; this._page = pg;
         this._catSig = this._cat ? JSON.stringify(this._cat.map(e => [e.id, e.state, e.msg || ''])) + this._confirm + JSON.stringify(this._note) : '';
         const loading = this._isLoading(); this._panelLoading = loading;
@@ -1002,6 +1004,25 @@ export default class VoiceTypingOverlay extends Extension {
                       (st.down ? 'rgba(255,255,255,0.04)' : st.hover ? 'rgba(255,255,255,0.10)' : 'rgba(255,255,255,0.06)') + ';';
         }, () => { this._sel.sounds = !this._sel.sounds; this._buildPanel(); });
         dim(sw); P.add_child(sw); this._soundRow = sw;
+
+        {
+        // follow-the-text-field on/off switch
+        P.add_child(sect('Bar position'));
+        const on = !!this._sel.follow;
+        const sw = new St.BoxLayout({x_expand: true});
+        const sname = lbl('Move bar to the text field I click', 10.5, '#fff'); sname.x_expand = true; sname.y_align = Clutter.ActorAlign.CENTER;
+        const track = new St.Bin({width: 40, height: 20, y_align: Clutter.ActorAlign.CENTER,
+            style: `border-radius: 10px; border: 1px solid ${on ? ACCENT : 'rgba(255,255,255,0.6)'}; background-color: ${on ? ACCENT : 'transparent'};`});
+        const knob = new St.Widget({width: 12, height: 12, y_align: Clutter.ActorAlign.CENTER, x_align: on ? Clutter.ActorAlign.END : Clutter.ActorAlign.START,
+            style: `border-radius: 6px; margin: 0 4px; background-color: ${on ? '#000' : 'rgba(255,255,255,0.8)'};`});
+        track.set_child(knob);
+        sw.add_child(sname); sw.add_child(track);
+        this._interactive(sw, (a, st) => {
+            a.style = 'padding: 8px 10px; border-radius: 6px; spacing: 8px; border: 1px solid rgba(255,255,255,0.07); background-color: ' +
+                      (st.down ? 'rgba(255,255,255,0.04)' : st.hover ? 'rgba(255,255,255,0.10)' : 'rgba(255,255,255,0.06)') + ';';
+        }, () => { this._sel.follow = !this._sel.follow; this._buildPanel(); });
+        dim(sw); P.add_child(sw); this._followRow = sw;
+        }
         }
 
         if (pg === 'setup') P.add_child(this._setupInfo(m, !!depsCard));
@@ -1031,7 +1052,7 @@ export default class VoiceTypingOverlay extends Extension {
             const sub = {
                 model: (cur ? cur.name : 'No model picked') + '  ·  ' + DEV_LABEL[this._sel.dev],
                 mic: (mic ? mic.name : 'System default') + '  ·  noise suppression ' + (s.noise_suppression !== false ? 'on' : 'off'),
-                typing: 'Pause after ' + (pause === 'Never' ? 'never' : pause) + '  ·  sounds ' + (this._sel.sounds ? 'on' : 'off'),
+                typing: 'Pause after ' + (pause === 'Never' ? 'never' : pause) + '  ·  sounds ' + (this._sel.sounds ? 'on' : 'off') + '  ·  follow ' + (this._sel.follow ? 'on' : 'off'),
                 setup: miss ? `${miss} optional package${miss === 1 ? '' : 's'} missing  ·  uninstall` : 'Optional packages  ·  uninstall',
             };
             for (const [id, name, icon] of PAGES) {
@@ -1256,6 +1277,7 @@ export default class VoiceTypingOverlay extends Extension {
         if (this._sel.pause !== m.settings.auto_pause_seconds) payload.auto_pause_seconds = this._sel.pause;
         if (this._sel.mic !== (m.settings.mic || '')) payload.mic = this._sel.mic;
         if (this._sel.sounds !== (m.settings.sounds !== false)) payload.sounds = this._sel.sounds;
+        if (this._sel.follow !== (m.settings.follow_field !== false)) payload.follow_field = this._sel.follow;
         this._base = Object.assign({}, this._sel);          // what is saved now; any further change re-activates Save
         this._saveState = 'saved';
         if (this._saveTimer) GLib.source_remove(this._saveTimer);

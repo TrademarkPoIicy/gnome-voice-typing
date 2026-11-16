@@ -286,7 +286,7 @@ class Daemon:
         self.mseq += 1
         d = {'cli': N + '/bin/voice-typing', 'current': self.cur_id, 'current_name': self.name_of(self.cur_id),
              'models': [dict(e, device=dev_of(e)) for e in CATALOG if installed(e)], 'equiv': EQUIV, 'defaults': DEFAULTS, 'note': self.dev_note,
-             'settings': {'auto_pause_seconds': CFG['auto_pause_seconds'], 'mic': CFG.get('mic', ''), 'sounds': bool(CFG.get('sounds', True)),
+             'settings': {'auto_pause_seconds': CFG['auto_pause_seconds'], 'mic': CFG.get('mic', ''), 'sounds': bool(CFG.get('sounds', True)), 'follow_field': bool(CFG.get('follow_field', True)),
                           'noise_mode': CFG.get('noise_mode', 'auto'), 'silence_threshold': CFG.get('silence_threshold', 0.5), 'noise_suppression': bool(CFG.get('noise_suppression', True)),
                           'noise_floor': CFG.get('noise_floor', 0.0), 'noise_floor_raw': CFG.get('noise_floor_raw', 0.0), 'streaming': CFG.get('streaming', 'auto'),
                           'device': dev_of(cat_entry(self.cur_id)), 'mics': list_mics()},
@@ -301,6 +301,7 @@ class Daemon:
         if 'auto_pause_seconds' in msg: ch['auto_pause_seconds'] = int(msg['auto_pause_seconds'])
         if 'mic' in msg: ch['mic'] = str(msg['mic'])
         if 'sounds' in msg: ch['sounds'] = bool(msg['sounds'])
+        if 'follow_field' in msg: ch['follow_field'] = bool(msg['follow_field'])
         if msg.get('noise_mode') in ('auto', 'manual'): ch['noise_mode'] = msg['noise_mode']
         if 'silence_threshold' in msg:
             try: ch['silence_threshold'] = round(max(0.0, min(1.0, float(msg['silence_threshold']))), 2)

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.7
+
+- New switch in Settings > Typing & sounds: "Move bar to the text field I click". Turn it off and the bar stays where it first appeared instead of jumping each time you click into a different text box.
+
 ## 0.1.6
 
 - No more GNOME remote-control (screen sharing) prompt: the portal typing fallback is off by default (GVT_PORTAL=1 brings it back).

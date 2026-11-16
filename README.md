@@ -10,7 +10,7 @@ the text box you are typing in.
 - **Good accuracy.** The default model is NVIDIA Parakeet-TDT 0.6B, which adds punctuation and capital letters by itself.
 - **Not tied to one GPU brand.** The GPU engine uses Vulkan (AMD, Intel, NVIDIA with a Vulkan driver). No CUDA or ROCm needed.
 
-> Status: 0.1.0, first public release. Tested on Fedora 45 with GNOME Shell 51 (Wayland) and a Radeon GPU. Debian/Ubuntu and Arch
+> Status: early releases (see `CHANGELOG.md`). Tested on Fedora 45 with GNOME Shell 51 (Wayland) and a Radeon GPU. Debian/Ubuntu and Arch
 > support is implemented in the installer but has had less testing. Please report problems.
 
 ## Features
@@ -43,14 +43,24 @@ The installer installs missing system packages for you (Fedora/dnf, Debian and U
 
 ## Install
 
+One line in a terminal:
+
 ```sh
-tar xzf gnome-voice-typing-0.1.0.tar.gz
-cd gnome-voice-typing-0.1.0
+curl -fsSL https://raw.githubusercontent.com/TrademarkPoIicy/gnome-voice-typing/main/get.sh | bash
+```
+
+It downloads the current version from GitHub into a temporary folder and runs `./install.sh`, which asks before anything that
+needs your password. Pass installer options after `bash -s --`, for example `... | bash -s -- --cpu-only` or `... | bash -s -- --dry-run`
+(shows everything it would do, changes nothing). Run the same line again to upgrade.
+
+Prefer to look first? Clone and run it yourself:
+
+```sh
+git clone https://github.com/TrademarkPoIicy/gnome-voice-typing.git
+cd gnome-voice-typing
 ./install.sh --dry-run     # optional: shows everything it would do, changes nothing
 ./install.sh
 ```
-
-Verify the download first if you like: `sha256sum -c gnome-voice-typing-0.1.0.tar.gz.sha256`.
 
 **Then log out and log back in** (once). On Wayland, GNOME Shell only loads a new extension at login.
 
@@ -81,8 +91,8 @@ Only two things need administrator rights, and both are optional:
 2. **The `/dev/uinput` rule.** To type into other windows the program creates a virtual keyboard with `ydotool`, which needs write
    access to `/dev/uinput` (normally root-only). The installer adds `/etc/udev/rules.d/70-gnome-voice-typing-uinput.rules`
    (one line: give the logged-in desktop user access to `/dev/uinput`) and `/etc/modules-load.d/gnome-voice-typing-uinput.conf`
-   (load the `uinput` module at boot). Decline it and typing uses GNOME's remote-control portal instead: it works, but GNOME
-   asks for permission once and shows a remote-control indicator while typing. `uninstall.sh` removes both files.
+   (load the `uinput` module at boot). Decline it and set it up later from Settings > Setup & uninstall (one password prompt);
+   typing does not work until then. `uninstall.sh` removes both files.
 
 > Security note: a rule that lets your user session create virtual input devices means programs running as you can inject
 > keystrokes. That is also true of any program that can use the portal. If you do not want that, decline the rule.
@@ -136,7 +146,7 @@ are left alone. Log out and in afterwards so GNOME Shell forgets the extension.
 - **The bar does not appear.** You need to log out and in once after installing. Check `gnome-extensions list | grep voice-typing`
   and `gnome-extensions info voice-typing@gnome-voice-typing.github.io`; make sure *"disable-user-extensions"* is off.
 - **The bar is listening but nothing is typed.** Run `voice-typing --check`: `uinput writable: False` means the udev rule is missing (re-run
-  `./install.sh`, or log out and in). Without it the portal fallback needs you to approve GNOME's remote-control prompt once.
+  `./install.sh`, press Install in Settings > Setup & uninstall, or log out and in).
 - **The bar is not placed next to my text box.** It needs *toolkit-accessibility* (the installer turns it on) and apps started **after**
   that to be restarted once. Electron/Chromium apps (VS Code, Discord, Chrome) only expose text boxes when started with accessibility
   on (e.g. `--force-renderer-accessibility`); otherwise the bar falls back to the bottom of the window.
@@ -154,7 +164,7 @@ while you dictate. Audio is processed in memory and never written to disk; typed
 by `install.sh` and `voice-typing-models`: distro package servers, PyPI, GitHub (whisper.cpp source; model archives) and Hugging Face (models),
 all over HTTPS, with SHA-256 / commit-id verification. The program itself does not contact any server.
 
-## Limitations (0.1.0)
+## Limitations
 
 - GNOME Shell only (it is a Shell extension); tested on Wayland. Not for KDE, Xfce, etc.
 - English is the best-supported language; Parakeet v3 also handles other European languages, the `.en` Whisper models are English only.

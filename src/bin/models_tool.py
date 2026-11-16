@@ -600,7 +600,7 @@ def main(a):
         print('graphics card (Vulkan): %s   engine built: %s   package manager: %s' % ({True: 'yes', False: 'no', None: 'unknown'}[d['gpu']], 'yes' if d['engine_built'] else 'no', d['pm'] or 'unsupported'))
         if not d['total']: print('nothing missing'); return 0
         print('missing for the graphics-card engine: %s' % (' '.join(d['missing_gpu']) or '-'))
-        print('missing for typing (else GNOME asks for remote-control permission): %s' % (' '.join(d['missing_typing']) or '-'))
+        print('missing for typing: %s' % (' '.join(d['missing_typing']) or '-'))
         print('missing for noise suppression (optional): %s' % (' '.join(d['missing_noise']) or '-'))
         print('missing for better voice detection (optional, Python packages, no password needed): %s' % (' '.join(d['missing_pip']) or '-'))
         print('dictation works without these. To install everything:  voice-typing-models deps install' + (('   (system packages: %s)' % d['manual']) if d['manual'] else '')); return 0

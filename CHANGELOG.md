@@ -2,6 +2,7 @@
 
 ## 0.1.7
 
+- One-line install: `curl -fsSL https://raw.githubusercontent.com/TrademarkPoIicy/gnome-voice-typing/main/get.sh | bash`. The README no longer points at the old 0.1.0 tarball.
 - New switch in Settings > Typing & sounds: "Move bar to the text field I click". Turn it off and the bar stays where it first appeared instead of jumping each time you click into a different text box.
 
 ## 0.1.6

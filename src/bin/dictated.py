@@ -80,6 +80,15 @@ def load_model(ent, strict=False):
             except Exception as e2: log('GPU fallback failed too', repr(e2))
         return asr.load(ent['backend'], ent['id'], strict=False), ent['id']
 
+def pick_installed():
+    """The model to load: the saved choice if it is installed, else a default, else any installed model; None = nothing installed."""
+    ent = cat_entry(CFG.get('model'))
+    if ent and installed(ent): return ent
+    for mid in (DEFAULTS.get(CFG.get('device') or 'gpu'), DEFAULTS['gpu'], DEFAULTS['cpu']):
+        e = cat_entry(mid)
+        if e and installed(e): return e
+    return next((e for e in CATALOG if installed(e)), None)
+
 def installed(e):
     if e['backend'] == 'vk':
         return e['id'] in VKMAP and os.path.exists(N + '/models/ggml/' + VKFILES[e['id']]) and os.path.exists(N + '/gpu/libasrshim.so')
@@ -353,26 +362,35 @@ class Daemon:
 
     def load_asr(self):
         try:
-            import asr; t = time.time()
-            ent = cat_entry(CFG['model']) or {'backend': CFG['backend'], 'id': CFG['model']}
+            import asr
+            ent = pick_installed()
+            if ent is None:                                # fresh install: no model yet. The bar offers 'Install model'; load the first one that appears
+                EXTRA['no_model'] = True; EXTRA['model'] = ''; EXTRA['device'] = ''; self.write_models(); self.show()
+                log('no speech model installed: waiting for one (Settings > Speech model > Download)')
+                while ent is None: time.sleep(2); ent = pick_installed()
+                EXTRA['no_model'] = False; EXTRA['loading'] = ent['name']; self.show()
+                log('model installed: loading', ent['id'])
+            if ent['id'] != CFG.get('model'): persist_cfg(backend=ent['backend'], model=ent['id'], device=dev_of(ent))
+            t = time.time()
             a, eff = load_model(ent)                       # falls back across devices by itself (GPU->CPU or CPU->GPU), logged only
             if a.name.startswith('ct2') and ent['backend'] != 'ct2' and eff == ent['id']: eff = 'small.en'
             if eff != ent['id'] and dev_of(cat_entry(eff)) != dev_of(ent):
                 self.dev_note = '%s unavailable, using %s' % (DEVNAME[dev_of(ent)], DEVNAME[dev_of(cat_entry(eff))].lower())
             lt = time.time() - t
             with ASR_LOCK: wt = asr.warm(a); wt2 = asr.warm(a)
-            self.asr = a
+            self.asr = a; EXTRA['loading'] = ''
             if eff != self.cur_id:
                 self.cur_id = eff; self.set_extra_model(eff); self.write_models(); self.show()   # config.json untouched: next start retries the chosen device
             log('model ready: backend=%s model=%s load=%.1fs warmup=%.2fs/%.2fs%s' % (a.name, eff, lt, wt, wt2, '' if eff == CFG['model'] else ' (FALLBACK from %s)' % CFG['model']))
         except Exception as e:
-            self.asr_err = repr(e); log('MODEL ERROR', repr(e))
+            EXTRA['loading'] = ''; self.asr_err = repr(e); log('MODEL ERROR', repr(e))
 
     # --- state/overlay
     def show(self, state=None):
         s = state or self.state
         busy = self.pending > 0
-        if s == 'listening' and time.time() < self.err_until: ov('error', text=self.err_text)
+        if EXTRA.get('no_model') and s in ('listening', 'paused', 'starting'): ov('paused', text='No speech model yet')
+        elif s == 'listening' and time.time() < self.err_until: ov('error', text=self.err_text)
         elif s == 'listening' and self.asr is None and not self.asr_err: ov('starting', busy=True)
         elif s in ('listening', 'paused', 'starting'): ov(s, self.level, busy=busy)
         else: ov('hidden')
@@ -708,8 +726,8 @@ class Daemon:
                 self.pending -= 1; self.q.task_done()
 
     def phrase(self, audio, sess, ph=None):
-        while self.asr is None and not self.asr_err: time.sleep(0.05)
-        if self.asr is None: self.error('Speech model failed to load'); return
+        while self.asr is None and not self.asr_err and not EXTRA.get('no_model'): time.sleep(0.05)
+        if self.asr is None: self.error('No speech model yet' if EXTRA.get('no_model') else 'Speech model failed to load'); return
         t = time.time()
         with ASR_LOCK: text = self.asr.transcribe(audio).strip()      # self.asr read inside the lock: a switch may close the old model
         tt = time.time() - t

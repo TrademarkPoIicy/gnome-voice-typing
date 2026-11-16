@@ -71,6 +71,12 @@ export default class VoiceTypingOverlay extends Extension {
         this._modelLabel = lbl('', 6.5, 'rgba(255,255,255,0.55)');
         this._modelLabel.clutter_text.ellipsize = Pango.EllipsizeMode.END;
         texts.add_child(this._label); texts.add_child(this._modelLabel);
+        // no model installed yet: the model line reads 'Install model' and opens Settings > Speech model (otherwise clicks pass through to the bar)
+        this._modelLabel.reactive = true; this._modelLabel.track_hover = true;
+        const noModel = () => !!(this._info && this._info.no_model);
+        this._modelLabel.connect('notify::hover', () => { if (noModel()) this._modelLabel.style = this._modelStyle(this._modelLabel.hover ? '#fff' : ACCENT, true, 7.5); });
+        this._modelLabel.connect('button-press-event', (a, ev) => (noModel() && ev.get_button() === 1) ? Clutter.EVENT_STOP : Clutter.EVENT_PROPAGATE);
+        this._modelLabel.connect('button-release-event', (a, ev) => { if (!noModel() || ev.get_button() !== 1) return Clutter.EVENT_PROPAGATE; this._openModelPage(); return Clutter.EVENT_STOP; });
         this._barSpin = this._mkSpinner(12); this._barSpin.visible = false;
         this._gear = this._iconButton('emblem-system-symbolic', 12, false, () => this._togglePanel(), 24);
         this._close = this._iconButton('window-close-symbolic', 12, true, () => this._cli(['close']), 24);
@@ -713,7 +719,8 @@ export default class VoiceTypingOverlay extends Extension {
         this._state = state;
         const i = this._info, loading = !!i.loading;
         const dv = i.device ? ' · ' + i.device : '';
-        if (loading) { this._modelLabel.text = `Loading ${shortName(i.loading)}…`; this._modelLabel.style = this._modelStyle(ACCENT); }
+        if (i.no_model) { this._modelLabel.text = 'Install model ›'; this._modelLabel.style = this._modelStyle(this._modelLabel.hover ? '#fff' : ACCENT, true, 7.5); }
+        else if (loading) { this._modelLabel.text = `Loading ${shortName(i.loading)}…`; this._modelLabel.style = this._modelStyle(ACCENT); }
         // 'Now <model>' at 7pt fits the 204 px bar (the long 'Switched to ...' was cut off); ellipsize END still covers long names
         else if (i.switched) { this._modelLabel.text = `Now ${shortName(i.switched)}${dv}`; this._modelLabel.style = this._modelStyle(ACCENT, true, 7); }
         else { this._modelLabel.text = i.model ? shortName(i.model) + dv : ''; this._modelLabel.style = this._modelStyle('rgba(255,255,255,0.55)'); }
@@ -774,6 +781,10 @@ export default class VoiceTypingOverlay extends Extension {
     }
 
     // ---------- settings panel ----------
+    _openModelPage() {
+        if (!this._panelOpen) this._openPanel();
+        this._page = 'model'; this._scrollKeep = 0; this._unConfirm = false; this._buildPanel();
+    }
     _togglePanel() { this._panelOpen ? this._closePanel() : this._openPanel(); }
     _openPanel() {
         if (!this._models) return;

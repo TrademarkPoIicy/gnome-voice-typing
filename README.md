@@ -25,7 +25,7 @@ the text box you are typing in.
   sounds on/off, noise suppression, background noise Auto / Manual with Calibrate, sensitivity and a live noise-level meter, and
   **Uninstall Voice Typing** (removes everything, one password prompt for the udev rule).
 - Many models: Parakeet v3 (GPU) and v2 (CPU), Whisper (tiny to large-v3-turbo, GPU and CPU), Moonshine. **One-click installs:** the
-  installer downloads just one default model; every model is always listed in the settings panel, and **Download** (with its size)
+  installer downloads no models; the first time you open the bar it shows **Install model** next to the mic. Every model is always listed in the settings panel, and **Download** (with its size)
   fetches, checksum-verifies and installs it, with a progress bar and Cancel. Installed models show **Uninstall** (not available for
   the model in use).
 

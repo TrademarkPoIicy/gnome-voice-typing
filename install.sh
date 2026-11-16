@@ -29,9 +29,9 @@ usage: ./install.sh [options]
   --dry-run          print what would be done (nothing is changed, nothing is downloaded)
   -y, --yes          answer "yes" to every question, INCLUDING the sudo steps (package install, udev rule)
   --gpu | --cpu-only use / skip the graphics-card (Vulkan) engine (default: detect and ask)
-  --model ID         first model to download (default: parakeet-gpu with a GPU, parakeet on CPU); see: voice-typing-models list
-  --no-cpu-fallback  with the GPU engine, do not also download the small CPU fallback model
-  --no-models        do not download any model now
+  --model ID         also download this model now (default: none; pick one from the bar's "Install model" after install)
+  --no-cpu-fallback  with --model and the GPU engine, do not also download the small CPU fallback model
+  --no-models        do not download any model now (the default)
   --binding ACCEL    keyboard shortcut (default '<Super>h'; e.g. '<Super><Alt>h')
   --no-keybinding    do not create a keyboard shortcut
   --no-system-deps   do not install distro packages (you must have them already)
@@ -269,14 +269,15 @@ else say "Using the CPU engine (sherpa-onnx). Nothing to build."; fi
 # ---------------------------------------------------------------- 6. models
 step "6/10 Speech models"
 if [ "$USE_GPU" = 1 ]; then DEFMODEL=parakeet-gpu; else DEFMODEL=parakeet; fi
-[ -n "$MODEL" ] || MODEL="$DEFMODEL"
+MODEL_ARG="$MODEL"; [ -n "$MODEL" ] || MODEL="$DEFMODEL"
 python3 -c "import json,sys; sys.exit(0 if sys.argv[1] in json.load(open(sys.argv[2]))['models'] else 1)" "$MODEL" "$APPDIR/data/models-registry.json" || die "Unknown model '$MODEL'. Known ids: $(python3 -c "import json,sys; print(' '.join(json.load(open(sys.argv[1]))['models']))" "$APPDIR/data/models-registry.json")"
 MODELS_TO_GET="$MODEL"
-if [ "$USE_GPU" = 1 ] && [ "$MODEL" = "$DEFMODEL" ] && [ "$CPU_FALLBACK" != no ]; then
+if [ -z "$MODEL_ARG" ]; then NO_MODELS=1; fi       # no models at install time unless --model was given
+if [ "$NO_MODELS" != 1 ] && [ "$USE_GPU" = 1 ] && [ "$MODEL" = "$DEFMODEL" ] && [ "$CPU_FALLBACK" != no ]; then
   echo "    A small CPU model is also used automatically if the graphics card is ever unavailable (e.g. a driver problem)."
   ask "Also download the CPU fallback model (Parakeet int8, ~460 MB)?" y && MODELS_TO_GET="$MODELS_TO_GET parakeet"
 fi
-if [ "$NO_MODELS" = 1 ]; then warn "--no-models: no model downloaded. Install one later with: voice-typing-models install $MODEL"
+if [ "$NO_MODELS" = 1 ]; then ok "No speech model downloaded now: after install, press the shortcut and click \"Install model\" on the bar to pick one."
 else
   echo "    Models are downloaded only from their official hosts (Hugging Face, GitHub) and checked against pinned SHA-256 checksums."
   echo "    Licenses: see THIRD_PARTY_LICENSES.md (Parakeet is CC-BY-4.0: credit NVIDIA if you redistribute or build on it; Whisper and Moonshine are MIT)."
@@ -286,7 +287,7 @@ else
   done
   [ "$DRY" = 1 ] || state_set models "$(python3 -c "import json,sys; print(json.dumps(sys.argv[1].split()))" "$MODELS_TO_GET")"
 fi
-say "Only one model was downloaded now. Every other model is one click away: click the gear on the voice bar and press Download next to it (Uninstall removes it again)."
+say "Models are one click away: click \"Install model\" (or the gear) on the voice bar and press Download next to one (Uninstall removes it again)."
 say "From a terminal: voice-typing-models list | install ID | remove ID"
 # config: create only if it does not exist (never overwrite your settings)
 if [ -f "$CONF/config.json" ]; then ok "Keeping your existing settings ($CONF/config.json)."

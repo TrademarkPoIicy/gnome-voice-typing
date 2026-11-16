@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.8
+
+- The installer no longer downloads a speech model (use `--model ID` if you want one at install time).
+- With no model installed, the bar says "No speech model yet" and shows **Install model** next to the mic, which opens Settings > Speech model. The first model you download loads automatically.
+
 ## 0.1.7
 
 - One-line install: `curl -fsSL https://raw.githubusercontent.com/TrademarkPoIicy/gnome-voice-typing/main/get.sh | bash`. The README no longer points at the old 0.1.0 tarball.

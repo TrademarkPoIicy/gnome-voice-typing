@@ -45,7 +45,7 @@ export default class VoiceTypingOverlay extends Extension {
         // one-click model downloads: catalog (every model + its state) comes from `voice-typing-models status --json`, progress from models/.status/<id>.json
         this._cat = null; this._dlW = {}; this._pend = {}; this._confirm = ''; this._note = {}; this._dlTimer = 0; this._catTimer = 0; this._adopted = false; this._catSig = ''; this._scrollKeep = 0;
         // first-launch check for missing system packages (graphics-card engine / typing): `voice-typing-models deps --json`, progress in models/.status/_deps.json
-        this._deps = null; this._depsChecked = false; this._depsTimer = 0; this._depsPend = 0; this._depsOpen = false;
+        this._deps = null; this._depsChecked = false; this._depsTimer = 0; this._depsPend = 0; this._depsAckPending = false; this._depsRevision = 0;
 
         // ---- main bar ----
         this._bar = new St.BoxLayout({
@@ -254,19 +254,20 @@ export default class VoiceTypingOverlay extends Extension {
         });
     }
     // ---------- missing system packages (first launch) ----------
-    _refreshDeps(autoOpen) {
+    _refreshDeps() {
+        if (this._depsAckPending) return;
+        const revision = ++this._depsRevision;
         const tool = this._toolPath('voice-typing-models'); if (!tool || !GLib.file_test(tool, GLib.FileTest.EXISTS)) return;
         let p; try { p = Gio.Subprocess.new([tool, 'deps', '--json'], Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_SILENCE); } catch (e) { return; }
         p.communicate_utf8_async(null, null, (pr, res) => {
             try {
-                if (!this._bar) return;
+                if (!this._bar || revision !== this._depsRevision) return;
                 const [, out] = pr.communicate_utf8_finish(res);
                 const d = JSON.parse(out); const prev = JSON.stringify(this._deps); this._deps = d;
                 const job = d.job && d.job.status;
                 if (['installing', 'building'].includes(job)) this._depsTickStart();
-                // first launch: open Settings once so the prompt is seen; "Not now" stores the dismissal until the missing list changes
-                if (autoOpen && d.needed && !d.dismissed && !this._panelOpen && this._models) { this._depsOpen = true; this._openPanel(); }
-                else if (this._panelOpen && prev !== JSON.stringify(d)) this._buildPanel();
+                // Background checks update Settings only when the user has opened it.
+                if (this._panelOpen && prev !== JSON.stringify(d)) this._buildPanel();
             } catch (e) { console.error('voice-typing deps: ' + e); }
         });
     }
@@ -285,7 +286,7 @@ export default class VoiceTypingOverlay extends Extension {
         if (sig(s) !== sig(old)) { this._deps.job = s; if (this._panelOpen) this._buildPanel(); }
         if (s && ['installing', 'building', 'downloading', 'verifying'].includes(s.status)) return GLib.SOURCE_CONTINUE;
         this._depsTimer = 0;
-        this._refreshDeps(false); this._refreshCat();
+        this._refreshDeps(); this._refreshCat();
         if (s && s.status === 'done' && this._panelOpen) { this._sel.dev = 'gpu'; const g = (this._cat || []).find(e => e.id === 'parakeet-gpu' && e.state === 'installed'); if (g) this._sel.model = g.id; }
         return GLib.SOURCE_REMOVE;
     }
@@ -294,10 +295,27 @@ export default class VoiceTypingOverlay extends Extension {
         if (!this._spawnTool(['deps', 'install'])) { this._deps.job = {status: 'failed', msg: 'Could not start the installer.'}; this._buildPanel(); return; }
         this._depsPend = GLib.get_monotonic_time(); this._deps.job = {status: 'installing', msg: 'Waiting for your password…'}; this._buildPanel(); this._depsTickStart();
     }
+    _depsAcknowledge() {
+        if (this._depsAckPending) return;
+        const tool = this._toolPath('voice-typing-models'); if (!tool) return;
+        let p;
+        try { p = Gio.Subprocess.new([tool, 'deps', 'ack'], Gio.SubprocessFlags.STDOUT_SILENCE | Gio.SubprocessFlags.STDERR_SILENCE); }
+        catch (e) { console.error('voice-typing setup acknowledgement: ' + e); return; }
+        this._depsAckPending = true;
+        ++this._depsRevision; // Ignore checks started before OK was clicked.
+        p.wait_check_async(null, (pr, res) => {
+            try {
+                pr.wait_check_finish(res);
+                if (this._bar && this._deps) this._deps.job = null;
+            } catch (e) { console.error('voice-typing setup acknowledgement: ' + e); }
+            this._depsAckPending = false;
+            if (this._bar) { if (this._panelOpen) this._buildPanel(); this._refreshDeps(); }
+        });
+    }
     _depsNotNow() {
         this._spawnTool(['deps', 'dismiss']);
         if (this._deps) { this._deps.dismissed = true; this._deps.job = null; }
-        this._depsOpen = false; this._buildPanel();
+        this._buildPanel();
     }
     // the prompt (full card when it matters, one compact line after "Not now" so it can be found again in Settings)
     _depsCard() {
@@ -311,7 +329,7 @@ export default class VoiceTypingOverlay extends Extension {
         if (job === 'done') {
             box.style = box.style.replace(/255,184,77/g, '108,203,95');
             box.add_child(note(d.job.msg || 'All set.', 'rgba(108,203,95,0.95)', 10));
-            const r = row(); r.add_child(this._pill('OK', 'plain', () => { this._spawnTool(['deps', 'undismiss']); this._deps.job = null; this._buildPanel(); })); box.add_child(r);
+            const r = row(); r.add_child(this._pill('OK', 'plain', () => this._depsAcknowledge())); box.add_child(r);
             return box;
         }
         if (d.dismissed && !busy && job !== 'failed') {     // compact reminder
@@ -759,7 +777,7 @@ export default class VoiceTypingOverlay extends Extension {
 
     _show() {
         if (!this._bar) return;
-        if (!this._depsChecked && this._toolPath('voice-typing-models')) { this._depsChecked = true; this._refreshDeps(true); }
+        if (!this._depsChecked && this._toolPath('voice-typing-models')) { this._depsChecked = true; this._refreshDeps(); }
         if (!this._placed) { this._startPlacement(); return; }   // bar stays hidden until it knows where to go (<= ~0.4 s)
         this._bar.visible = true;
         if (this._bar.opacity < 255) { this._bar.remove_all_transitions(); this._bar.ease({opacity: 255, duration: 120, mode: Clutter.AnimationMode.EASE_OUT_QUAD}); }
@@ -790,7 +808,7 @@ export default class VoiceTypingOverlay extends Extension {
         if (!this._models) return;
         this._syncSel(); this._saveState = 'idle'; this._readyUntil = 0;
         if (this._saveTimer) { GLib.source_remove(this._saveTimer); this._saveTimer = 0; }
-        this._confirm = ''; this._note = {}; this._scrollKeep = 0; this._page = this._page === 'setup' ? 'setup' : null; this._unConfirm = false; this._panelOpen = true; this._buildPanel(); this._refreshCat(); if (!this._depsOpen) this._refreshDeps(false); this._depsOpen = false;
+        this._confirm = ''; this._note = {}; this._scrollKeep = 0; this._page = this._page === 'setup' ? 'setup' : null; this._unConfirm = false; this._panelOpen = true; this._buildPanel(); this._refreshCat(); this._refreshDeps();
         this._panel.visible = true; this._panel.reactive = true; this._placePanel(); this._geomSoon();
         this._panel.remove_all_transitions(); this._panel.ease({opacity: 255, duration: 120, mode: Clutter.AnimationMode.EASE_OUT_QUAD});
     }

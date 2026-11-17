@@ -13,6 +13,7 @@ The Settings panel runs this same tool (one-click Download / Uninstall); progres
   voice-typing-models licenses
   voice-typing-models deps [--json]              missing system packages for the graphics-card engine / typing (first-launch check)
   voice-typing-models deps install               install them (graphical password prompt via pkexec), then build the engine
+  voice-typing-models deps ack                   acknowledge the completed setup message
   voice-typing-models deps dismiss|undismiss     "Not now" in the first-launch prompt / show it again
 
 A model counts as installed only when EVERY file listed in the registry exists with the right size AND a marker
@@ -552,6 +553,13 @@ def deps_install():
         st('failed', str(e)); return 1
     except Exception as e:
         st('failed', friendly(e)); return 1
+def deps_ack():
+    """Persist OK without clearing missing-package reminders or active/failed jobs."""
+    s = read_status(DEPS_ID)
+    if s and s.get('status') == 'done':
+        try: os.unlink(_sfile(DEPS_ID))
+        except FileNotFoundError: pass
+
 def deps_dismiss(on=True):
     if not on:
         try: os.unlink(DISMISS)
@@ -594,6 +602,7 @@ def main(a):
     if cmd == 'deps':
         sub = rest[0] if rest else 'status'
         if sub == 'install': return deps_install()
+        if sub == 'ack': deps_ack(); return 0
         if sub in ('dismiss', 'undismiss'): deps_dismiss(sub == 'dismiss'); return 0
         d = deps_status()
         if '--json' in opts: print(json.dumps(d)); return 0

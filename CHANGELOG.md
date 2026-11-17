@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Persist the setup success message acknowledgement so it stays dismissed after reopening Settings or restarting GNOME Shell.
+- Keep background dependency checks from opening Settings automatically at startup.
+
 ## 0.1.8
 
 - The installer no longer downloads a speech model (use `--model ID` if you want one at install time).

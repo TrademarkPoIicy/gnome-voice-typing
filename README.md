@@ -223,7 +223,16 @@ In Setup & uninstall, install **pip** first if offered, then **Refresh package
 list** to discover individual packages and their supporting libraries. Downloads
 can run concurrently with independent progress bars. Writes to the Python
 environment or system package database are serialized. System packages may still
-require their listed dependencies to be installed first. No button installs the
-whole list. Installed packages disappear based on installed package metadata.
+require their listed dependencies to be installed first. Individual buttons install only the selected package. Installed packages disappear based on installed package metadata.
 The graphics engine shows approximate build-stage percentages, rather than a
 byte-download percentage. Settings stays open during background state changes.
+
+### Finish setup later (0.1.14)
+
+**Settings → Setup & uninstall → Install all** installs missing optional system
+packages and their dependencies, prepares pip, installs the voice-detection
+packages, sets up typing permission, and builds the graphics engine when available.
+The initial GitHub installer stays lightweight. Individual package buttons remain
+available for people who prefer to choose each package. Speech models are still
+chosen separately. Failed batch installs show the error and can be retried;
+already installed packages are skipped. System installation may ask for a password.

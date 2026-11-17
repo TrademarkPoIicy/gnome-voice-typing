@@ -337,6 +337,8 @@ export default class VoiceTypingOverlay extends Extension {
     }
     _depsInstall(component) {
         if (!this._deps || !component || component.installed || !component.can_install) return;
+        if (this._packageActive(this._deps.jobs?.all)) return;
+        if (component.id === 'all' && Object.values(this._deps.jobs || {}).some(j => this._packageActive(j))) return;
         if (component.resolve_first) component = {id: 'catalog', name: 'package list', can_install: true};
         if (this._packageActive(this._deps.jobs?.[component.id])) return;
         ++this._depsRevision;
@@ -376,7 +378,7 @@ export default class VoiceTypingOverlay extends Extension {
     _depsCard() {
         const d = this._deps; if (!d) return null;
         const jobs = d.jobs || {}, busy = Object.values(jobs).some(j => this._packageActive(j));
-        const catalog = jobs.catalog, job = catalog?.status;
+        const catalog = jobs.catalog, job = catalog?.status, batch = jobs.all, batchActive = this._packageActive(batch);
         const setupPage = this._page === 'setup';
         if (!setupPage && !d.needed && !busy && job !== 'failed') return null;
         const box = new St.BoxLayout({orientation: Clutter.Orientation.VERTICAL, x_expand: true,
@@ -388,10 +390,16 @@ export default class VoiceTypingOverlay extends Extension {
             return box;
         }
         box.add_child(lbl('Packages & setup', 11, '#fff', 'bold'));
-        box.add_child(note('Each supporting package installs separately. Installed packages stay out of this list.'));
-        box.add_child(this._pill('Refresh package list', 'plain', () => this._depsInstall({id: 'catalog', name: 'package list', can_install: true}), !this._packageActive(catalog)));
+        box.add_child(note('Finish setup with Install all, or choose packages individually. Installed packages stay out of this list.'));
+        if (d.needed || !d.plan_ready || batchActive || batch?.status === 'failed') {
+            box.add_child(this._pill(batchActive ? 'Installing all…' : batch?.status === 'failed' ? 'Retry install all' : 'Install all', 'primary',
+                () => this._depsInstall({id: 'all', name: 'optional setup', can_install: true}), !busy));
+            box.add_child(note('Includes supporting packages, typing permission and the graphics engine when available. Speech models are selected separately.'));
+        }
+        if (batch && batch.status !== 'done') box.add_child(note(batch.msg || 'Preparing setup…', batch.status === 'failed' ? '#ff9a9c' : SEC));
+        box.add_child(this._pill('Refresh package list', 'plain', () => this._depsInstall({id: 'catalog', name: 'package list', can_install: true}), !batchActive && !this._packageActive(catalog)));
         if (catalog && job !== 'done') box.add_child(note(catalog.msg || 'Working…', job === 'failed' ? '#ff9a9c' : '#fff'));
-        if (d.pip_ready === false) box.add_child(note('Install pip below first, then refresh to list every supporting package.'));
+        if (d.pip_ready === false && !batchActive) box.add_child(note('Install all prepares pip automatically. For individual installs, install pip first and then refresh.'));
         if (d.check_error) box.add_child(note(d.check_error, '#ff9a9c'));
         if (!d.check_error && d.components && !d.components.length) box.add_child(note(d.plan_ready ? 'All listed packages are installed.' : 'Refresh the package list to discover available add-ons and supporting libraries.'));
         if (!d.components) {
@@ -414,7 +422,7 @@ export default class VoiceTypingOverlay extends Extension {
             if (item.installed) row.add_child(lbl('Installed', 9, '#7ddc70'));
             else {
                 const button = this._pill(active ? 'Installing…' : itemJob?.status === 'failed' ? 'Retry' : item.resolve_first ? 'List requirements' : 'Install', 'primary',
-                    () => this._depsInstall(item), !active && item.can_install);
+                    () => this._depsInstall(item), !batchActive && !active && item.can_install);
                 button.y_align = Clutter.ActorAlign.START; row.add_child(button);
             }
             list.add_child(row);

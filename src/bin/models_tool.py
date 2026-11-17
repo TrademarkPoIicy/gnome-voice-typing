@@ -522,12 +522,58 @@ def deps_install(component=None):
         return 2
     os.makedirs(STATUS, exist_ok=True)
     if not re.fullmatch(r'[A-Za-z0-9_.:+-]+', component): return 2
-    with open(STATUS + '/_deps-' + component.replace(':', '_') + '.lock', 'a') as lock:
-        try: fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    # Individual installs may overlap; the batch owns setup exclusively so
+    # package-manager transactions and engine builds cannot race other helpers.
+    with open(STATUS + '/_setup-batch.lock', 'a') as gate:
+        mode = fcntl.LOCK_EX if component == 'all' else fcntl.LOCK_SH
+        try: fcntl.flock(gate, mode | fcntl.LOCK_NB)
         except BlockingIOError:
-            print('This component is already being installed.', file=sys.stderr)
+            write_status('_deps-' + component.replace(':', '_'), status='failed', component=component,
+                         msg='Another setup operation is running. Wait for it to finish, then retry.')
             return 1
-        return _deps_install_one(component)
+        with open(STATUS + '/_deps-' + component.replace(':', '_') + '.lock', 'a') as lock:
+            try: fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                print('This component is already being installed.', file=sys.stderr)
+                return 1
+            return _deps_install_one(component)
+
+
+def _deps_install_all(py, st):
+    """Finish optional setup on demand; speech-model selection stays separate."""
+    def component(cid, label):
+        st('installing', label)
+        if _deps_install_one(cid):
+            job = read_status('_deps-' + cid.replace(':', '_')) or {}
+            raise Fail(label + ': ' + job.get('msg', 'Installation failed. Retry Install all to resume.'))
+
+    d = deps_status()
+    if d.get('check_error'): raise Fail(d['check_error'])
+    if not d.get('pip_ready'): component('bootstrap:pip', 'Preparing the Python package installer')
+    if d['missing']:
+        spec = _sysdeps().get(d['pm'], {})
+        if not d['pkexec'] or not spec.get('install'):
+            raise Fail('A supported package manager and graphical password prompt (pkexec) are required.')
+        st('installing', 'Installing system packages and their dependencies; a password prompt may appear…')
+        # Install all explicitly authorizes the native dependency transaction.
+        package_plan.run(['pkexec'] + spec['install'] + d['missing'])
+        remaining = deps_status()['missing']
+        if remaining: raise Fail('System packages are still missing: ' + ', '.join(remaining))
+
+    component('catalog', 'Discovering optional Python packages and supporting libraries')
+    plan = package_plan.load(PACKAGE_PLAN, py)
+    if plan is None: raise Fail('Could not read the package list. Retry Install all.')
+    items = [item for item in plan['items'] if item['kind'] == 'python']
+    for index, item in enumerate(items, 1):
+        component(item['id'], 'Python package %d/%d: %s' % (index, len(items), item['name']))
+    if vad_pip_missing():
+        raise Fail('Some voice-detection packages could not be loaded. Check their errors in Setup and retry.')
+    d = deps_status()
+    if d['missing_perm']: component('permission', 'Setting up typing permission')
+    if d['gpu'] is not False and not d['engine_built']:
+        component('engine', 'Building the graphics-card engine')
+    st('done', 'Setup complete. Log out and back in if typing permission was added.', pct=100)
+    return 0
 
 
 def _deps_install_one(component):
@@ -539,6 +585,7 @@ def _deps_install_one(component):
         st('installing', 'Checking package requirements…', pct=0)
         py = N + '/venv/bin/python'
         if not os.path.exists(py): raise Fail('The app’s Python environment is missing. Run the main installer to repair it.')
+        if component == 'all': return _deps_install_all(py, st)
         d = deps_status()
         if component == 'catalog':
             if not d.get('pip_ready'): raise Fail('Install pip using its own button below, then refresh the package list.')

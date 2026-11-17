@@ -76,10 +76,21 @@ export default class VoiceTypingOverlay extends Extension {
         this._interactive(this._mic, (a, st) => this._micStyle(st), () => this._cli(['toggle']), () => !(this._info && this._info.loading));
         const texts = new St.BoxLayout({orientation: Clutter.Orientation.VERTICAL, y_align: Clutter.ActorAlign.CENTER, x_expand: true, style: 'spacing: 0px;'});
         this._label = lbl('Listening…', 9, 'rgba(255,255,255,0.92)');
-        this._label.clutter_text.ellipsize = Pango.EllipsizeMode.END;
+        this._texts = texts;
+        this._label.clutter_text.ellipsize = Pango.EllipsizeMode.NONE;
+        this._label.clutter_text.line_wrap = false;
+        // Give the status its own clipped viewport. Its full text width must
+        // not enlarge the bubble or push the microphone/settings buttons out.
+        this._statusClip = new St.Widget({layout_manager: new Clutter.FixedLayout(),
+            x_expand: true, clip_to_allocation: true, min_width: 0, min_width_set: true,
+            natural_width: 0, natural_width_set: true});
+        this._statusClip.add_child(this._label);
+        this._statusClip.connect('notify::width', () => this._queueStatusScroll());
+        this._label.connect('notify::text', () => this._queueStatusScroll());
+        this._label.connect('style-changed', () => this._queueStatusScroll());
         this._modelLabel = lbl('', 6.5, 'rgba(255,255,255,0.55)');
         this._modelLabel.clutter_text.ellipsize = Pango.EllipsizeMode.END;
-        texts.add_child(this._label); texts.add_child(this._modelLabel);
+        texts.add_child(this._statusClip); texts.add_child(this._modelLabel);
         // no model installed yet: the model line reads 'Install model' and opens Settings > Speech model (otherwise clicks pass through to the bar)
         this._modelLabel.reactive = true; this._modelLabel.track_hover = true;
         const noModel = () => !!(this._info && this._info.no_model);
@@ -120,7 +131,7 @@ export default class VoiceTypingOverlay extends Extension {
     }
 
     disable() {
-        this._endEditing();
+        this._endEditing(); this._stopStatusScroll();
         this._dragEnd(false); this._stopFollow(); this._locTok++;
         if (this._caret) { try { this._caret.setFocusCallback(null); } catch (e) {} try { this._caret.destroy(); } catch (e) {} this._caret = null; }
         if (this._monId) { this._mon.disconnect(this._monId); this._mon.cancel(); this._monId = 0; }
@@ -190,13 +201,51 @@ export default class VoiceTypingOverlay extends Extension {
         const size = {tiny: [102, 8, 24], compact: [204, 9, 24], comfortable: [260, 11, 30], large: [320, 13, 36]}[a.size];
         this._bar.width = size[0]; this._bar.style = this._barStyle(this._bar.hover);
         this._label.style = `${FONT} font-size: ${size[1]}pt; color: ${light ? '#171717' : '#fff'};`;
-        this._label.get_parent().visible = a.size !== 'tiny';
+        this._texts.visible = a.size !== 'tiny';
+        this._queueStatusScroll();
         this._grip.visible = a.size !== 'tiny';
         this._modelLabel.visible = a.size !== 'tiny' && (a.showModel || !!this._info.no_model || !!this._info.loading);
         for (const button of [this._mic, this._gear, this._close]) { button.width = size[2]; button.height = size[2]; }
         this._grip.style = `color: ${light ? '#555' : 'rgba(255,255,255,0.55)'};`;
         // Keep all action icons readable on a light background, including hover states.
         for (const button of [this._gear, this._close]) { if (button._upd) button._upd(); }
+    }
+
+    _stopStatusScroll() {
+        if (this._statusScrollIdle) { GLib.source_remove(this._statusScrollIdle); this._statusScrollIdle = 0; }
+        this._statusScrollGeneration = (this._statusScrollGeneration || 0) + 1;
+        this._statusScrollKey = null;
+        if (this._label) { this._label.remove_all_transitions(); this._label.translation_x = 0; }
+    }
+    _queueStatusScroll() {
+        if (!this._bar || !this._statusClip || this._statusScrollIdle) return;
+        this._statusScrollIdle = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+            this._statusScrollIdle = 0; this._syncStatusScroll(); return GLib.SOURCE_REMOVE;
+        });
+    }
+    _syncStatusScroll() {
+        if (!this._bar || !this._label || !this._statusClip) return;
+        const label = this._label;
+        const width = Math.ceil(label.clutter_text.get_preferred_width(-1)[1]);
+        const height = Math.ceil(label.clutter_text.get_preferred_height(-1)[1]);
+        if (label.width !== width) label.width = width;
+        if (label.height !== height) label.height = height;
+        if (this._statusClip.height !== height) this._statusClip.height = height;
+        const available = Math.floor(this._statusClip.width);
+        const overflow = Math.max(0, width - available);
+        const active = this._bar.visible && this._state !== 'hidden';
+        const key = JSON.stringify([label.text, width, height, available, this._texts.visible, active]);
+        if (key === this._statusScrollKey) return; // Audio-level updates must not restart the animation.
+        this._stopStatusScroll(); this._statusScrollKey = key;
+        if (!this._texts.visible || !active || available < 1 || overflow < 1) return;
+        const generation = this._statusScrollGeneration;
+        const duration = Math.max(1800, Math.round(overflow / 18 * 1000));
+        const move = toEnd => {
+            if (!this._bar || generation !== this._statusScrollGeneration || !this._bar.visible) return;
+            label.ease({translation_x: toEnd ? -overflow : 0, delay: 1400, duration,
+                mode: Clutter.AnimationMode.LINEAR, onComplete: () => move(!toEnd)});
+        };
+        move(true);
     }
 
     _mkSpinner(size) {
@@ -660,7 +709,7 @@ export default class VoiceTypingOverlay extends Extension {
             this._field = f; this._curKey = P.key; this._dragPos = null;
             this._log('show', `src=${P.src} rect=${JSON.stringify(P.rect)} pos=${x},${y} userMovedBefore=${wasMoved} staleDragPos=${hadDrag} ${JSON.stringify(this._dbgLoc || {})}`);
             this._userMoved = false; this._placed = true;
-            this._bar.remove_all_transitions(); this._bar.visible = true; this._bar.opacity = 0;
+            this._bar.remove_all_transitions(); this._bar.visible = true; this._bar.opacity = 0; this._queueStatusScroll();
             this._moveTo(x, y, false);
             this._bar.translation_y = slide;
             this._bar.ease({opacity: 255, translation_y: 0, duration: 170, mode: Clutter.AnimationMode.EASE_OUT_QUAD});
@@ -856,6 +905,7 @@ export default class VoiceTypingOverlay extends Extension {
     }
 
     _show() {
+        this._queueStatusScroll();
         if (!this._bar) return;
         if (!this._depsChecked && this._toolPath('voice-typing-models')) { this._depsChecked = true; this._refreshDeps(); }
         if (!this._placed) { this._startPlacement(); return; }   // bar stays hidden until it knows where to go (<= ~0.4 s)
@@ -863,6 +913,7 @@ export default class VoiceTypingOverlay extends Extension {
         if (this._bar.opacity < 255) { this._bar.remove_all_transitions(); this._bar.ease({opacity: 255, duration: 120, mode: Clutter.AnimationMode.EASE_OUT_QUAD}); }
     }
     _hide() {
+        this._stopStatusScroll();
         if (this._placed || this._state !== 'hidden') this._log('hide', `userMoved=${this._userMoved} dragPos=${JSON.stringify(this._dragPos || null)} -> cleared`);
         this._state = 'hidden'; this._placed = false; this._locTok++; this._locating = false; this._field = null; this._curKey = null; this._dragPos = null; this._userMoved = false; this._following = false; if (this._rawPrev !== 'suspended') this._rawPrev = 'hidden';
         this._stopFollow(); this._dragEnd(true);

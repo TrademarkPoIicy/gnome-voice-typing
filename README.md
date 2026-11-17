@@ -276,3 +276,9 @@ microphone and a live input level. **Mic preview** identifies the Settings meter
 using the microphone while dictation is paused. The **Install model** link remains
 available. Audio received before a model is ready is not queued for later typing.
 Concurrent Settings status writes are serialized, and bubble state updates are atomic.
+
+### Readable bubble status (0.1.18)
+
+Status messages that exceed the bubble’s available width slowly scroll back and
+forth, pausing at each end. Scrolling repeats while the message remains unchanged,
+resets for a new message, and stops for text that fits. Tiny remains icon-only.

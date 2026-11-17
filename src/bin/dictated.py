@@ -4,6 +4,7 @@ import glob, os, sys, json, socket, threading, queue, time, subprocess, re, sign
 import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import audiofx
+import customization
 N = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 APP = 'gnome-voice-typing'
 CFG = {'backend': 'vk', 'model': 'parakeet-gpu', 'sounds': True, 'end_silence': 0.7, 'auto_pause_seconds': 60,
@@ -24,11 +25,8 @@ os.makedirs(RT, mode=0o700, exist_ok=True)
 CATALOG = json.load(open(N + '/data/models.json'))
 
 def persist_cfg(**kw):
-    try: c = json.load(open(CFGFILE))
-    except Exception: c = {}
-    c.update(kw); tmp = CFGFILE + '.tmp'
-    os.makedirs(os.path.dirname(CFGFILE), exist_ok=True)
-    json.dump(c, open(tmp, 'w'), indent=2); os.replace(tmp, CFGFILE); CFG.update(kw)
+    customization.update_config(CFGFILE, kw)
+    CFG.update(kw)
 
 # ---------------- GPU (Vulkan) backend: gpu/backend.py (whisper.cpp / parakeet.cpp on the Radeon, model stays resident in VRAM) ----------------
 VKMAP = {'parakeet-gpu': 'parakeet', 'small.en-gpu': 'small.en', 'medium.en-q5-gpu': 'medium.en-q5_0', 'large-v3-turbo-gpu': 'large-v3-turbo'}
@@ -245,10 +243,7 @@ class Typer:
         self.portal = None
 
 def postprocess(text):
-    t = text.strip()
-    t = re.sub(r'[,.]?\s*\bnew paragraph\b[.,]?\s*', '\n\n', t, flags=re.I)
-    t = re.sub(r'[,.]?\s*\bnew line\b[.,]?\s*', '\n', t, flags=re.I)
-    return t
+    return customization.format_text(text, CFG)
 
 HOLD_LAST = {'new'}                  # a trailing word that may become a voice command is held back while streaming
 HALLUC = {'you', 'thank you', 'thanks for watching', 'bye', 'the end', 'thanks', 'okay', 'so'}
@@ -295,18 +290,19 @@ class Daemon:
         self.mseq += 1
         d = {'cli': N + '/bin/voice-typing', 'current': self.cur_id, 'current_name': self.name_of(self.cur_id),
              'models': [dict(e, device=dev_of(e)) for e in CATALOG if installed(e)], 'equiv': EQUIV, 'defaults': DEFAULTS, 'note': self.dev_note,
-             'settings': {'auto_pause_seconds': CFG['auto_pause_seconds'], 'mic': CFG.get('mic', ''), 'sounds': bool(CFG.get('sounds', True)), 'follow_field': bool(CFG.get('follow_field', True)),
+             'settings': {**customization.settings(CFG), 'auto_pause_seconds': CFG['auto_pause_seconds'], 'mic': CFG.get('mic', ''), 'sounds': bool(CFG.get('sounds', True)), 'follow_field': bool(CFG.get('follow_field', True)),
                           'noise_mode': CFG.get('noise_mode', 'auto'), 'silence_threshold': CFG.get('silence_threshold', 0.5), 'noise_suppression': bool(CFG.get('noise_suppression', True)),
                           'noise_floor': CFG.get('noise_floor', 0.0), 'noise_floor_raw': CFG.get('noise_floor_raw', 0.0), 'streaming': CFG.get('streaming', 'auto'),
                           'device': dev_of(cat_entry(self.cur_id)), 'mics': list_mics()},
-             'switch': self.switch, 'seq': self.mseq}
+             'switch': self.switch, 'last_error': getattr(self, 'last_error', None), 'seq': self.mseq}
         try:
             with open(OVDIR + '/models.tmp', 'w') as f: json.dump(d, f)
             os.replace(OVDIR + '/models.tmp', OVDIR + '/models.json')
         except Exception as e: log('write_models failed', repr(e))
 
     def apply(self, msg):
-        ch = {}
+        ch = customization.validate(msg)
+        if msg.get('clear_error') is True: self.last_error = None
         if 'auto_pause_seconds' in msg: ch['auto_pause_seconds'] = int(msg['auto_pause_seconds'])
         if 'mic' in msg: ch['mic'] = str(msg['mic'])
         if 'sounds' in msg: ch['sounds'] = bool(msg['sounds'])
@@ -322,7 +318,7 @@ class Daemon:
             eq = cat_entry(EQUIV.get(self.cur_id))
             mid = eq['id'] if (eq and dev_of(eq) == dev and installed(eq)) else DEFAULTS[dev]
         if dev in ('gpu', 'cpu') and (not mid or mid == self.cur_id) and dev_of(cat_entry(self.cur_id)) == dev: ch['device'] = dev
-        if ch: persist_cfg(**ch); log('settings saved', ch)
+        if ch: persist_cfg(**ch); log('settings saved:', ', '.join(ch))
         if mid and mid != self.cur_id:
             if self.switch['status'] == 'loading': return
             ent = next((e for e in CATALOG if e['id'] == mid), None)
@@ -354,7 +350,7 @@ class Daemon:
             EXTRA['loading'] = ''
             cur = cat_entry(self.cur_id)
             self.dev_note = ('%s unavailable, using %s' % (DEVNAME[dev_of(ent)], DEVNAME[dev_of(cur)].lower())) if dev_of(ent) != dev_of(cur) else ''
-            self.switch = {'status': 'error', 'target': ent['id'], 'msg': 'Could not load %s - keeping %s' % (ent['name'], self.name_of(self.cur_id))}
+            self.switch = {'status': 'error', 'target': ent['id'], 'msg': 'Could not load %s. Still using %s. Try a smaller model or Processor.' % (ent['name'], self.name_of(self.cur_id))}
         self.write_models(); self.show()
 
     def _clear_switched(self):
@@ -384,28 +380,36 @@ class Daemon:
             log('model ready: backend=%s model=%s load=%.1fs warmup=%.2fs/%.2fs%s' % (a.name, eff, lt, wt, wt2, '' if eff == CFG['model'] else ' (FALLBACK from %s)' % CFG['model']))
         except Exception as e:
             EXTRA['loading'] = ''; self.asr_err = repr(e); log('MODEL ERROR', repr(e))
+            self.error('Speech model failed to load', detail='Open Settings > Speech model and try a smaller installed model or Processor. Check Settings > Setup & uninstall for missing packages.'); self.show()
 
     # --- state/overlay
     def show(self, state=None):
         s = state or self.state
         busy = self.pending > 0
         if EXTRA.get('no_model') and s in ('listening', 'paused', 'starting'): ov('paused', text='No speech model yet')
-        elif s == 'listening' and time.time() < self.err_until: ov('error', text=self.err_text)
+        elif s in ('listening', 'paused') and time.time() < self.err_until: ov('error', text=self.err_text)
         elif s == 'listening' and self.asr is None and not self.asr_err: ov('starting', busy=True)
         elif s in ('listening', 'paused', 'starting'): ov(s, self.level, busy=busy)
         else: ov('hidden')
 
-    def error(self, text, secs=3):
+    def error(self, text, secs=8, detail=''):
         self.err_text = text; self.err_until = time.time() + secs; log('ERROR shown:', text)
+        self.last_error = {'summary': text, 'detail': detail, 'time': time.strftime('%H:%M')}
+        self.write_models()
+
 
     # --- commands
     def handle(self, msg):
         c = msg.get('cmd'); log('cmd', c, '(state %s)' % self.state)
         if c in ('toggle', 'start', 'pause', 'resume') and self.switch['status'] == 'loading':
             log('ignored (model is loading)'); return json.dumps({'state': self.state, 'loading': True})
+        if c == 'preferences': return json.dumps({'settings': customization.settings(CFG)})
         if c == 'models':
             self.write_models(); return json.dumps({'current': self.cur_id, 'models': [dict(e, installed=installed(e)) for e in CATALOG], 'switch': self.switch, 'settings': {'auto_pause_seconds': CFG['auto_pause_seconds'], 'mic': CFG.get('mic', ''), 'device': dev_of(cat_entry(self.cur_id))}})
-        if c == 'apply': self.apply(msg); return json.dumps({'ok': True, 'switch': self.switch})
+        if c == 'apply':
+            try: self.apply(msg)
+            except (ValueError, OSError) as e: return json.dumps({'error': 'Settings were not saved: ' + str(e)})
+            return json.dumps({'ok': True, 'switch': self.switch})
         if c == 'calibrate': return json.dumps(self.calibrate())
         if c == 'meter': self.meter(); return json.dumps({'state': self.state, 'rms': round(self.rms, 1), 'floor': round(self.floor, 1)})
         with self.lock:
@@ -485,7 +489,7 @@ class Daemon:
         if sess.src: cmd = ['ffmpeg', '-v', 'quiet', '-re', '-i', sess.src, '-af', 'adelay=500,apad=pad_dur=2.5', '-f', 's16le', '-ar', '16000', '-ac', '1', '-']
         try: rec = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         except Exception as e:
-            self.error('Microphone unavailable'); log('recorder failed', repr(e)); self.state = 'paused'; self.show(); return
+            self.error('Microphone unavailable', detail='Open Settings > Microphone & noise and select a connected microphone. Check that it is not muted in system Sound settings, then try again.'); log('recorder failed', repr(e)); self.state = 'paused'; self.show(); return
         end_chunks = max(2, int(round(CFG['end_silence'] * 10)))
         dn, vad = self._frontend()
         log('listening: noise suppression=%s, vad=%s, noise mode=%s, streaming=%s' % (dn.name if dn else 'off', 'silero' if vad.ok else 'energy', CFG.get('noise_mode', 'auto'), CFG.get('streaming', 'auto')))
@@ -541,6 +545,10 @@ class Daemon:
         if in_speech and phrase: submit(phrase, silent, ph)
         if dn: dn.close()
         self.level = 0.0; EXTRA['mic'] = 0.0; EXTRA['speech'] = False
+        if eof and not sess.src and not self.stop.is_set():
+            self.state = 'paused'
+            self.error('Microphone disconnected', detail='Reconnect the microphone or select another one in Settings > Microphone & noise, then resume dictation.')
+            self.show()
         if sess.oneshot and eof:       # test feed finished: drain, press Enter if asked, close
             self.q.join()
             if sess.enter and not DRY: self.typer.type('\n')
@@ -620,6 +628,7 @@ class Daemon:
 
     # --- streaming (incremental typing): partial passes over the growing phrase, local agreement, adaptive pacing
     def _stream_mode(self):
+        if customization.whole_phrase_required(CFG): return 'off'
         m = CFG.get('streaming', 'auto')
         if m is False or str(m).lower() in ('false', 'off', '0'): return 'off'
         if m is True or str(m).lower() in ('true', 'on', '1'): return 'on'
@@ -721,15 +730,20 @@ class Daemon:
                 continue
             try: self.phrase(audio, sess, ph)
             except Exception as e:
-                log('phrase error', repr(e)); self.error(str(e) if isinstance(e, NotReady) else 'Could not type that phrase')
+                log('phrase error', repr(e)); self.error(str(e) if isinstance(e, NotReady) else 'Could not type the phrase', detail='Click an editable text field and try again. If nothing is typed, open Settings > Setup & uninstall to check typing permissions and packages. Part of the phrase may already have been typed; check it before repeating.')
             finally:
                 self.pending -= 1; self.q.task_done()
 
     def phrase(self, audio, sess, ph=None):
         while self.asr is None and not self.asr_err and not EXTRA.get('no_model'): time.sleep(0.05)
-        if self.asr is None: self.error('No speech model yet' if EXTRA.get('no_model') else 'Speech model failed to load'); return
+        if self.asr is None: self.error('No speech model yet' if EXTRA.get('no_model') else 'Speech model failed to load', detail='Open Settings > Speech model. Download a model, or select a smaller installed model. If the graphics-card model fails, try Processor.'); return
         t = time.time()
-        with ASR_LOCK: text = self.asr.transcribe(audio).strip()      # self.asr read inside the lock: a switch may close the old model
+        try:
+            with ASR_LOCK: text = self.asr.transcribe(audio).strip()  # A model switch holds the same lock.
+        except Exception as e:
+            log('transcription failed', repr(e))
+            self.error('Speech recognition failed', detail='Try again. If this repeats, open Settings > Speech model and select a smaller model or Processor. Your microphone recording is not saved.')
+            return
         tt = time.time() - t
         dur = len(audio) / RATE
         log('transcribed %.1fs audio in %.2fs (%d chars)%s' % (dur, tt, len(text), (': %r' % text) if DRY else ''))   # typed text is never logged (except in the developer dry-run mode)
@@ -747,7 +761,8 @@ class Daemon:
         out = postprocess(text)
         if sess.first and sess.prefix: out = sess.prefix + out
         sess.first = False
-        t = time.time(); how = self.typer.type(out + ' '); self.last_typed = out + ' '
+        out += ' ' if out and not out.endswith('\n') and customization.settings(CFG)['trailing_space'] else ''
+        t = time.time(); how = self.typer.type(out); self.last_typed = out
         log('typed via %s in %.2fs (%d chars)' % (how, time.time() - t, len(out)))
 
 D = Daemon()

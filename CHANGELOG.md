@@ -1,7 +1,12 @@
 # Changelog
 
-## Unreleased
+## 0.1.9
 
+- Add a native Personalization editor for bar appearance, dictation formatting, preferred vocabulary and start/pause/close shortcuts.
+- Validate shortcut conflicts, preserve customized shortcuts during upgrades, and remove both app shortcuts on uninstall.
+- Apply vocabulary rules after recognition with whole-word matching and a live text preview; keep custom formatting consistent by typing complete phrases.
+- Save configuration atomically under a lock, and reject invalid settings with a readable error.
+- Keep actionable microphone, model and typing errors in Settings after the transient bar message.
 - Persist the setup success message acknowledgement so it stays dismissed after reopening Settings or restarting GNOME Shell.
 - Keep background dependency checks from opening Settings automatically at startup.
 

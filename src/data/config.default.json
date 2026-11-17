@@ -7,5 +7,14 @@
   "auto_pause_seconds": 60,
   "auto_close_paused_seconds": 300,
   "ydotool_key_delay_ms": 6,
-  "mic": ""
+  "mic": "",
+  "bar_theme": "dark",
+  "bar_size": "compact",
+  "bar_opacity": 97,
+  "show_model": true,
+  "punctuation": "model",
+  "capitalization": "model",
+  "spoken_punctuation": false,
+  "trailing_space": true,
+  "vocabulary": []
 }

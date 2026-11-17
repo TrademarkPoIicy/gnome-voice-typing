@@ -4,8 +4,11 @@ import os, sys, socket, json, subprocess, time, datetime
 N = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RT = os.environ.get('XDG_RUNTIME_DIR') or ('/tmp/gnome-voice-typing-%d' % os.getuid()); SOCK = RT + '/gnome-voice-typing.sock'
 cmd = sys.argv[1] if len(sys.argv) > 1 else 'toggle'
+if cmd in ('preferences', 'settings'):
+    os.execv('/usr/bin/python3', ['/usr/bin/python3', N + '/bin/preferences.py'])
 HELP = """usage: voice-typing [toggle|start|pause|resume|close|status|quit]
        voice-typing --models | --model <id> | --apply '{"device":"cpu"}' | --apply '{"sounds":false}' | --check
+  preferences  open appearance, formatting, vocabulary and shortcut settings
   toggle   start listening, or pause/resume (this is what the keyboard shortcut runs)
   close    stop dictation and hide the bar         status   print the daemon state (JSON)
   quit     stop the background daemon              --check  quick environment check
@@ -20,7 +23,7 @@ if cmd == '--model':
     msg = {'cmd': 'apply', 'model': sys.argv[2]}; cmd = 'apply'
 elif cmd == '--apply':
     msg = dict(json.loads(sys.argv[2]), cmd='apply'); cmd = 'apply'
-if cmd not in ('apply', 'models', 'toggle', 'start', 'pause', 'resume', 'close', 'status', 'quit', 'testwav', 'calibrate', 'meter'):
+if cmd not in ('apply', 'models', 'toggle', 'start', 'pause', 'resume', 'close', 'status', 'quit', 'testwav', 'calibrate', 'meter', 'preferences'):
     print(HELP); sys.exit(2)
 msg = locals().get('msg') or {'cmd': cmd}
 if cmd == 'testwav':
@@ -39,3 +42,7 @@ except Exception:
         time.sleep(0.1)
         try: print(send().strip()); break
         except Exception: pass
+
+    else:
+        print(json.dumps({'error': 'The background service did not start. Check the installed Python environment and speech packages.'}))
+        sys.exit(1)

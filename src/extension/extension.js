@@ -23,7 +23,7 @@ const CLOSE_RED = '#c42b1c', CLOSE_RED_DOWN = '#9d2216', CLOSE_GLOW = 'rgba(232,
 const devOf = (e) => (e && e.device) || (e && e.backend === 'vk' ? 'gpu' : 'cpu');
 const DEV_LABEL = {gpu: 'Graphics card', cpu: 'Processor'};
 const PAGES = [['model', 'Speech model', 'audio-input-microphone-symbolic'], ['mic', 'Microphone & noise', 'audio-volume-high-symbolic'],
-               ['typing', 'Typing & sounds', 'input-keyboard-symbolic'], ['setup', 'Setup & uninstall', 'emblem-system-symbolic']];
+               ['typing', 'Typing & sounds', 'input-keyboard-symbolic'], ['personalize', 'Personalization', 'preferences-desktop-appearance-symbolic'], ['setup', 'Setup & uninstall', 'emblem-system-symbolic']];
 const shortName = (n) => (n || '').replace(/\s*\(.*?\)/g, '').replace(/-TDT.*$/, '').replace(/ q5$/, '').trim();
 
 const SEC = 'rgba(255,255,255,0.74)';      // secondary text on the dark panel (~8:1 contrast)
@@ -146,15 +146,37 @@ export default class VoiceTypingOverlay extends Extension {
         return this._interactive(b, (a, s) => {
             if (danger && s.down) { a.style = `border-radius: ${R}px; background-color: ${CLOSE_RED_DOWN};`; icon.style = 'color: #fff;'; }
             else if (danger && s.hover) { a.style = `border-radius: ${R}px; background-color: ${CLOSE_RED}; box-shadow: 0 0 12px 1px ${CLOSE_GLOW};`; icon.style = 'color: #fff;'; }
-            else if (s.down) { a.style = `border-radius: ${R}px; background-color: rgba(255,255,255,0.04);`; icon.style = 'color: rgba(255,255,255,0.6);'; }
-            else if (s.hover) { a.style = `border-radius: ${R}px; background-color: rgba(255,255,255,0.09);`; icon.style = 'color: rgba(255,255,255,0.95);'; }
-            else { a.style = `border-radius: ${R}px; background-color: transparent;`; icon.style = 'color: rgba(255,255,255,0.68);'; }
+            else if (s.down) { a.style = `border-radius: ${R}px; background-color: rgba(255,255,255,0.04);`; icon.style = a === this._gear && this._appearance().theme === 'light' ? 'color: #222;' : 'color: rgba(255,255,255,0.6);'; }
+            else if (s.hover) { a.style = `border-radius: ${R}px; background-color: rgba(255,255,255,0.09);`; icon.style = (a === this._gear || a === this._close) && this._appearance().theme === 'light' ? 'color: #111;' : 'color: rgba(255,255,255,0.95);'; }
+            else { a.style = `border-radius: ${R}px; background-color: transparent;`; icon.style = (a === this._gear || a === this._close) && this._appearance().theme === 'light' ? 'color: #333;' : 'color: rgba(255,255,255,0.68);'; }
         }, onClick);
     }
 
+    _appearance() {
+        const s = this._models?.settings || {};
+        return {theme: ['dark', 'light', 'contrast'].includes(s.bar_theme) ? s.bar_theme : 'dark',
+                size: ['compact', 'comfortable', 'large'].includes(s.bar_size) ? s.bar_size : 'compact',
+                opacity: Number.isFinite(s.bar_opacity) ? Math.max(70, Math.min(100, s.bar_opacity)) / 100 : 0.97,
+                showModel: s.show_model !== false};
+    }
     _barStyle(hot) {
-        return `background-color: rgba(32,32,32,0.97); border: 1px solid ${hot ? 'rgba(255,255,255,0.16)' : 'rgba(255,255,255,0.08)'}; border-radius: 22px; ` +
+        const a = this._appearance(), light = a.theme === 'light', contrast = a.theme === 'contrast';
+        const rgb = light ? '245,245,245' : contrast ? '0,0,0' : '32,32,32';
+        const border = contrast ? '#fff' : light ? 'rgba(0,0,0,0.25)' : hot ? 'rgba(255,255,255,0.16)' : 'rgba(255,255,255,0.08)';
+        return `background-color: rgba(${rgb},${contrast ? 1 : a.opacity}); border: 1px solid ${border}; border-radius: 22px; ` +
                'padding: 4px 5px 4px 9px; spacing: 4px; box-shadow: 0 4px 14px rgba(0,0,0,0.50), 0 1px 3px rgba(0,0,0,0.35);';
+    }
+    _applyAppearance() {
+        if (!this._bar || !this._label) return;
+        const a = this._appearance(), light = a.theme === 'light';
+        const size = {compact: [204, 9, 24], comfortable: [260, 11, 30], large: [320, 13, 36]}[a.size];
+        this._bar.width = size[0]; this._bar.style = this._barStyle(this._bar.hover);
+        this._label.style = `${FONT} font-size: ${size[1]}pt; color: ${light ? '#171717' : '#fff'};`;
+        this._modelLabel.visible = a.showModel || !!this._info.no_model || !!this._info.loading;
+        for (const button of [this._mic, this._gear, this._close]) { button.width = size[2]; button.height = size[2]; }
+        this._grip.style = `color: ${light ? '#555' : 'rgba(255,255,255,0.55)'};`;
+        // Keep all action icons readable on a light background, including hover states.
+        for (const button of [this._gear, this._close]) { if (button._upd) button._upd(); }
     }
 
     _mkSpinner(size) {
@@ -198,6 +220,7 @@ export default class VoiceTypingOverlay extends Extension {
             const m = JSON.parse(new TextDecoder().decode(bytes));
             const first = !this._models;
             this._models = m;
+            this._applyAppearance();
             if (first || !this._panelOpen) this._syncSel();
             if (this._panelOpen) this._buildPanel();
         } catch (e) {}
@@ -457,7 +480,7 @@ export default class VoiceTypingOverlay extends Extension {
         return [Math.round(Math.min(Math.max(x, a.x + MARGIN), a.x + a.width - w - MARGIN)),
                 Math.round(Math.min(Math.max(y, a.y + MARGIN), a.y + a.height - h - MARGIN))];
     }
-    _barSize() { return [BAR_W, this._bar.get_preferred_height(-1)[1]]; }
+    _barSize() { return [this._bar.width || BAR_W, this._bar.get_preferred_height(-1)[1]]; }
 
     _focusWin() {
         const w = global.display.focus_window; if (!w) return null;
@@ -728,7 +751,12 @@ export default class VoiceTypingOverlay extends Extension {
         this._micIcon.style = `color: ${S.fg};`;
         this._mic.scale_x = this._mic.scale_y = st.down ? 0.92 : 1.0;
     }
-    _modelStyle(color, bold, pt = 8) { return `${FONT} font-size: ${pt}pt; color: ${color};${bold ? ' font-weight: bold;' : ''}`; }
+    _modelStyle(color, bold, pt = 8) {
+        const a = this._appearance();
+        if (a.theme === 'light') color = color === ACCENT ? '#005a85' : '#444';
+        pt += a.size === 'large' ? 3 : a.size === 'comfortable' ? 1.5 : 0;
+        return `${FONT} font-size: ${pt}pt; color: ${color};${bold ? ' font-weight: bold;' : ''}`;
+    }
 
     _apply(state, level, text, busy) {
         if (!this._bar) return;
@@ -747,12 +775,13 @@ export default class VoiceTypingOverlay extends Extension {
             this._label.text = text || 'Listening…';
             this._setMic(busy ? '#ffd166' : ACCENT, 'audio-input-microphone-symbolic', '#000', Math.round(level * 5), loading);
         } else if (state === 'starting') {
-            this._label.text = 'Getting ready…'; this._setMic(IDLE_BG, 'audio-input-microphone-symbolic', '#e8e8e8', 0, loading);
+            this._label.text = 'Getting ready…'; this._setMic(IDLE_BG, 'audio-input-microphone-symbolic', this._appearance().theme === 'light' ? '#333' : '#e8e8e8', 0, loading);
         } else if (state === 'paused') {
-            this._label.text = text || 'Paused'; this._setMic(IDLE_BG, 'microphone-disabled-symbolic', '#e8e8e8', 0, loading);
+            this._label.text = text || 'Paused'; this._setMic(IDLE_BG, 'microphone-disabled-symbolic', this._appearance().theme === 'light' ? '#333' : '#e8e8e8', 0, loading);
         } else {
             this._label.text = text || 'Something went wrong'; this._setMic('#e5484d', 'dialog-warning-symbolic', '#fff', 0, false);
         }
+        this._applyAppearance();
         this._show();
         if (this._panelOpen) {
             if (this._isLoading() !== this._panelLoading) this._buildPanel(); else this._updatePanelStatus();
@@ -1054,7 +1083,17 @@ export default class VoiceTypingOverlay extends Extension {
         }
         }
 
+        if (pg === 'personalize') {
+            P.add_child(wrapLbl(lbl('Choose the bar’s appearance, format your dictation, add preferred words, and change your shortcuts.', 10.5, SEC)));
+            P.add_child(this._pill('Open Personalization', 'primary', () => { this._cli(['preferences']); this._closePanel(); }));
+        }
         if (pg === 'setup') P.add_child(this._setupInfo(m, !!depsCard));
+        if ((!pg || pg === 'setup') && m.last_error) {
+            const e = m.last_error;
+            P.add_child(wrapLbl(lbl('Last problem' + (e.time ? ' · ' + e.time : '') + ': ' + e.summary, 10, '#ffb84d', 'bold')));
+            if (e.detail) P.add_child(wrapLbl(lbl(e.detail, 9.5, SEC)));
+            P.add_child(this._pill('Dismiss message', 'plain', () => this._cli(['--apply', JSON.stringify({clear_error: true})])));
+        }
 
         // footer: status (spinner / ready / error) + Save
         const foot = new St.BoxLayout({style: 'padding-top: 14px; spacing: 10px;'});
@@ -1082,6 +1121,7 @@ export default class VoiceTypingOverlay extends Extension {
                 model: (cur ? cur.name : 'No model picked') + '  ·  ' + DEV_LABEL[this._sel.dev],
                 mic: (mic ? mic.name : 'System default') + '  ·  noise suppression ' + (s.noise_suppression !== false ? 'on' : 'off'),
                 typing: 'Pause after ' + (pause === 'Never' ? 'never' : pause) + '  ·  sounds ' + (this._sel.sounds ? 'on' : 'off') + '  ·  follow ' + (this._sel.follow ? 'on' : 'off'),
+                personalize: 'Appearance · formatting · vocabulary · shortcuts',
                 setup: miss ? `${miss} optional package${miss === 1 ? '' : 's'} missing  ·  uninstall` : 'Optional packages  ·  uninstall',
             };
             for (const [id, name, icon] of PAGES) {

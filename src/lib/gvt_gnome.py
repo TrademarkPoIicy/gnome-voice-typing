@@ -92,12 +92,15 @@ def find_conflicts(binding, own=SLOT):
     return out
 
 def load_state(p):
-    try: return json.load(open(p))
+    try:
+        with open(p) as f: return json.load(f)
     except Exception: return {}
 
 def save_state(p, s):
     os.makedirs(os.path.dirname(os.path.abspath(p)), exist_ok=True)
-    tmp = p + '.tmp'; json.dump(s, open(tmp, 'w'), indent=2); os.replace(tmp, p)
+    tmp = p + '.tmp'
+    with open(tmp, 'w') as f: json.dump(s, f, indent=2)
+    os.replace(tmp, p)
 
 def settings_for(rec):
     return Gio.Settings.new_with_path(rec['schema'], rec['path']) if rec.get('path') else Gio.Settings.new(rec['schema'])
@@ -177,12 +180,14 @@ def cmd_restore(a):
             say('keeping %s %s = %s (changed since install)' % (c['schema'], c['key'], cur)); continue
         say('restoring %s%s %s -> %s' % (c['schema'], (' @' + c['path']) if c.get('path') else '', c['key'], 'default' if c['old'] is None else c['old']))
         if not dry: put(settings_for(c), c['key'], c['old'])
-    if G.get('slot'):
-        mk = Gio.Settings.new(MK); slots = [p for p in mk.get_strv('custom-keybindings') if p != G['slot']]
-        say('removing custom shortcut slot %s' % G['slot'])
+    owned_slots = ([G['slot']] if G.get('slot') else []) + G.get('extra_slots', [])
+    if owned_slots:
+        mk = Gio.Settings.new(MK); slots = [p for p in mk.get_strv('custom-keybindings') if p not in owned_slots]
+        say('removing Voice typing custom shortcut slots')
         if not dry:
-            cs = Gio.Settings.new_with_path(CUSTOM, G['slot'])
-            for k in ('name', 'command', 'binding'): cs.reset(k)
+            for path in owned_slots:
+                cs = Gio.Settings.new_with_path(CUSTOM, path)
+                for k in ('name', 'command', 'binding'): cs.reset(k)
             if G.get('custom_keybindings_old') is None and slots == list(mk.get_default_value('custom-keybindings').unpack()): mk.reset('custom-keybindings')
             else: mk.set_strv('custom-keybindings', slots)
             Gio.Settings.sync()

@@ -29,6 +29,20 @@ the text box you are typing in.
   fetches, checksum-verifies and installs it, with a progress bar and Cancel. Installed models show **Uninstall** (not available for
   the model in use).
 
+## Personalization
+
+Open the gear menu and choose **Personalization → Open Personalization**, or run `voice-typing preferences`.
+The editor pauses active dictation so you can type into its fields safely. Resume with your shortcut when finished.
+
+- **Appearance:** dark, light or high-contrast bar; compact, comfortable or large text/buttons; background opacity; show/hide the model name. Setup/loading messages remain visible. Bar placement still lives in **Typing & sounds**.
+- **Formatting:** keep or remove model punctuation, preserve capitalization or capitalize sentence starts/use lowercase, convert spoken punctuation, and choose whether to add a space after each phrase. “New line” and “new paragraph” still work.
+- **Vocabulary:** add up to 200 “heard phrase → preferred text” rules, for example `open ai → OpenAI`. Matches ignore case, respect word boundaries, prioritize longer matches, and preserve the preferred spelling. Rules replace recognized text; they do not retrain the model. Test them in the Formatting preview.
+- **Shortcuts:** record or disable start/pause and close shortcuts. Conflicting shortcuts are rejected without changing other apps. Use **Save shortcuts** to apply them immediately; routine upgrades preserve your choice.
+
+Use **Save personalization** for appearance, formatting and vocabulary. Appearance updates immediately while the service is running; text settings apply to subsequent phrases. Custom formatting or vocabulary uses complete phrases instead of incremental typing, so replacements cannot be split across partial results. With default text settings, incremental typing is unchanged. Settings are stored locally in `~/.config/gnome-voice-typing/config.json` (or `$XDG_CONFIG_HOME`).
+
+Errors remain available under **Settings → Setup & uninstall**, with steps for checking microphone selection, speech models or typing permissions. Dictated text and vocabulary entries are not included in settings-change logs.
+
 ## Requirements
 
 - GNOME Shell **45-51** (the extension is tested on 51). Wayland is the target; X11 is expected to work but is untested.

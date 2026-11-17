@@ -20,7 +20,7 @@ LOCALBIN="$HOME/.local/bin"
 STATE="$DATA/install-state.json"
 
 DRY=0; YES=0; WANT_GPU=auto; NO_SYSDEPS=0; NO_UDEV=0; NO_GNOME=0; NO_AUTOSTART=0; NO_START=0; NO_MODELS=0; FORCE=0
-BINDING='<Super>h'; MODEL=''; CPU_FALLBACK=ask; NO_KEYBIND=0
+BINDING='<Super>h'; BINDING_EXPLICIT=0; MODEL=''; CPU_FALLBACK=ask; NO_KEYBIND=0
 
 usage() { cat <<EOT
 gnome-voice-typing $VERSION installer
@@ -49,7 +49,7 @@ EOT
 while [ $# -gt 0 ]; do case "$1" in
   --dry-run) DRY=1;; -y|--yes) YES=1;; --gpu) WANT_GPU=yes;; --cpu-only) WANT_GPU=no;;
   --model) MODEL="${2:-}"; shift;; --no-cpu-fallback) CPU_FALLBACK=no;; --no-models) NO_MODELS=1;;
-  --binding) BINDING="${2:-}"; shift;; --no-keybinding) NO_KEYBIND=1;;
+  --binding) BINDING="${2:-}"; BINDING_EXPLICIT=1; shift;; --no-keybinding) NO_KEYBIND=1;;
   --no-system-deps) NO_SYSDEPS=1;; --no-udev) NO_UDEV=1;; --no-autostart) NO_AUTOSTART=1;; --no-start) NO_START=1;;
   --skip-gnome) NO_GNOME=1;; --force) FORCE=1;; -h|--help) usage; exit 0;;
   *) echo "unknown option: $1" >&2; usage >&2; exit 2;; esac; shift; done
@@ -129,9 +129,9 @@ esac
 step "2/10 System packages"
 # package lists per distro: RUNTIME always; BUILD only for the GPU engine
 case "$PM" in
-  dnf)    RUNTIME="python3 python3-gobject at-spi2-core pipewire-utils pulseaudio-utils wl-clipboard ydotool rnnoise"; BUILD="git cmake gcc-c++ make ninja-build glslc vulkan-headers vulkan-loader-devel spirv-headers-devel"; GPUPKG="vulkan-tools mesa-vulkan-drivers"; PQ='rpm -q --quiet';;
-  apt)    RUNTIME="python3 python3-venv python3-gi gir1.2-atspi-2.0 pipewire-bin pulseaudio-utils wl-clipboard ydotool"; BUILD="git cmake g++ make ninja-build libvulkan-dev glslc spirv-headers"; GPUPKG="vulkan-tools mesa-vulkan-drivers"; PQ='dpkg -s';;
-  pacman) RUNTIME="python python-gobject at-spi2-core pipewire libpulse wl-clipboard ydotool rnnoise"; BUILD="git cmake gcc make ninja vulkan-headers vulkan-icd-loader spirv-headers shaderc"; GPUPKG="vulkan-tools"; PQ='pacman -Qi';;
+  dnf)    RUNTIME="python3 python3-gobject gtk4 at-spi2-core pipewire-utils pulseaudio-utils wl-clipboard ydotool rnnoise"; BUILD="git cmake gcc-c++ make ninja-build glslc vulkan-headers vulkan-loader-devel spirv-headers-devel"; GPUPKG="vulkan-tools mesa-vulkan-drivers"; PQ='rpm -q --quiet';;
+  apt)    RUNTIME="python3 python3-venv python3-gi gir1.2-gtk-4.0 gir1.2-atspi-2.0 pipewire-bin pulseaudio-utils wl-clipboard ydotool"; BUILD="git cmake g++ make ninja-build libvulkan-dev glslc spirv-headers"; GPUPKG="vulkan-tools mesa-vulkan-drivers"; PQ='dpkg -s';;
+  pacman) RUNTIME="python python-gobject gtk4 at-spi2-core pipewire libpulse wl-clipboard ydotool rnnoise"; BUILD="git cmake gcc make ninja vulkan-headers vulkan-icd-loader spirv-headers shaderc"; GPUPKG="vulkan-tools"; PQ='pacman -Qi';;
   *) RUNTIME=""; BUILD=""; GPUPKG=""; PQ=true;;
 esac
 # ydotool 1.x is required (--socket-path). Some distros still ship 0.1.x (Ubuntu 24.04, Debian 12): then it is built from source instead.
@@ -344,6 +344,11 @@ PYE
     state_set extension_installed true
   fi
   ok "Extension files: $EXTDIR"
+  # A routine upgrade must keep the shortcut chosen in Personalization (including disabled).
+  if [ "$BINDING_EXPLICIT" = 0 ] && [ -f "$STATE" ]; then
+    BINDING="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("gnome", {}).get("binding", "<Super>h"))' "$STATE")"
+    [ -n "$BINDING" ] || NO_KEYBIND=1
+  fi
   CONFLICT_ARG=''
   if [ "$NO_KEYBIND" = 1 ]; then warn "--no-keybinding: no shortcut will be created. Bind your own to: $DATA/bin/voice-typing"
   else

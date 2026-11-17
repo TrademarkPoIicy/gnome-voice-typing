@@ -1,4 +1,5 @@
 """Resolve optional packages without installing them; download/install exactly one artifact."""
+import devlog
 import hashlib
 import fcntl
 import json
@@ -13,7 +14,9 @@ import urllib.request
 
 
 def run(args, **kwargs):
+    devlog.event('packages', 'COMMAND', arguments=args)
     result = subprocess.run(args, capture_output=True, text=True, timeout=600, env=dict(os.environ, LC_ALL='C'), **kwargs)
+    devlog.event('packages', 'RESULT', returncode=result.returncode, stdout=result.stdout, stderr=result.stderr)
     if result.returncode:
         raise RuntimeError((result.stderr or result.stdout)[-1800:].strip() or 'Package command failed.')
     return result.stdout

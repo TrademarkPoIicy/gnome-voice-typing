@@ -8,7 +8,7 @@ import tempfile
 
 DEFAULTS = {
     'bar_theme': 'dark', 'settings_theme': 'dark', 'bar_size': 'compact', 'bar_opacity': 97,
-    'show_model': True, 'punctuation': 'model', 'capitalization': 'model',
+    'developer_logging': False, 'show_model': True, 'punctuation': 'model', 'capitalization': 'model',
     'spoken_punctuation': False, 'trailing_space': True, 'vocabulary': [],
 }
 THEMES = ('dark', 'light', 'contrast', 'ocean', 'forest', 'plum', 'midnight', 'warm')

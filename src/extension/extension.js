@@ -25,12 +25,12 @@ const DEV_LABEL = {gpu: 'Graphics card', cpu: 'Processor'};
 const PAGES = [['model', 'Speech model', 'audio-input-microphone-symbolic'], ['mic', 'Microphone & noise', 'audio-volume-high-symbolic'],
                ['typing', 'Typing & sounds', 'input-keyboard-symbolic'], ['appearance', 'Appearance', 'preferences-desktop-appearance-symbolic'],
                ['formatting', 'Dictation formatting', 'format-text-bold-symbolic'], ['vocabulary', 'Custom vocabulary', 'accessories-dictionary-symbolic'],
-               ['shortcuts', 'Keyboard shortcuts', 'preferences-desktop-keyboard-shortcuts-symbolic'], ['setup', 'Setup & uninstall', 'emblem-system-symbolic']];
+               ['shortcuts', 'Keyboard shortcuts', 'preferences-desktop-keyboard-shortcuts-symbolic'], ['setup', 'Setup & uninstall', 'emblem-system-symbolic'], ['developer', 'Developer tools', 'applications-engineering-symbolic']];
 const shortName = (n) => (n || '').replace(/\s*\(.*?\)/g, '').replace(/-TDT.*$/, '').replace(/ q5$/, '').trim();
 
 const THEMES = {dark: '32,32,32', light: '245,245,245', contrast: '0,0,0', ocean: '15,43,65', forest: '22,48,35', plum: '51,29,61', midnight: '18,22,40', warm: '57,39,29'};
 const THEME_OPTIONS = Object.keys(THEMES).map(key => [key, key === 'contrast' ? 'High contrast' : key[0].toUpperCase() + key.slice(1)]);
-const PREFS = {bar_theme: 'dark', settings_theme: 'dark', bar_size: 'compact', bar_opacity: 97, show_model: true, punctuation: 'model', capitalization: 'model', spoken_punctuation: false, trailing_space: true, vocabulary: []};
+const PREFS = {developer_logging: false, bar_theme: 'dark', settings_theme: 'dark', bar_size: 'compact', bar_opacity: 97, show_model: true, punctuation: 'model', capitalization: 'model', spoken_punctuation: false, trailing_space: true, vocabulary: []};
 const clone = value => JSON.parse(JSON.stringify(value));
 
 const SEC = 'rgba(255,255,255,0.74)';      // secondary text on the dark panel (~8:1 contrast)
@@ -145,7 +145,7 @@ export default class VoiceTypingOverlay extends Extension {
         actor.connect('button-press-event', (a, ev) => { if (ev.get_button() !== 1) return Clutter.EVENT_PROPAGATE; down = true; upd(); return Clutter.EVENT_STOP; });
         actor.connect('button-release-event', (a, ev) => {
             const was = down; down = false; upd();
-            if (was && actor.hover && en()) onClick();
+            if (was && actor.hover && en()) { this._log('CONTROL CLICK', this._page || 'dictation bubble'); onClick(); }
             return Clutter.EVENT_STOP;
         });
         actor._upd = upd; upd();
@@ -215,6 +215,7 @@ export default class VoiceTypingOverlay extends Extension {
     _ensureSpin() { if (this._info.loading && !this._spinId) this._spinId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 60, () => this._spinTick()); }
 
     _cli(args) {
+        this._log('COMMAND', JSON.stringify(args));
         const cli = (this._models && this._models.cli) || null;
         if (!cli) return;
         try { Gio.Subprocess.new([cli, ...args], Gio.SubprocessFlags.STDOUT_SILENCE | Gio.SubprocessFlags.STDERR_SILENCE); } catch (e) { console.error('voice-typing cli: ' + e); }
@@ -272,7 +273,8 @@ export default class VoiceTypingOverlay extends Extension {
     }
     _toolPath(name) { const cli = this._models && this._models.cli; return cli ? GLib.path_get_dirname(cli) + '/' + name : null; }
     _statusDir() { const cli = this._models && this._models.cli; return cli ? GLib.path_get_dirname(GLib.path_get_dirname(cli)) + '/models/.status' : null; }
-    _spawnTool(args) {   // detached helper process (own session): downloads never run inside gnome-shell and survive it
+    _spawnTool(args) {
+        this._log('SETUP COMMAND', JSON.stringify(args));   // detached helper process (own session): downloads never run inside gnome-shell and survive it
         const tool = this._toolPath('voice-typing-models'); if (!tool) return false;
         const setsid = GLib.find_program_in_path('setsid');
         try { Gio.Subprocess.new(setsid ? [setsid, '-f', tool, ...args] : [tool, ...args], Gio.SubprocessFlags.STDOUT_SILENCE | Gio.SubprocessFlags.STDERR_SILENCE); return true; }
@@ -507,15 +509,11 @@ export default class VoiceTypingOverlay extends Extension {
 
     // ---------- position (drag) ----------
     // The dragged position lives only in this._dragPos for the current open session (cleared by _hide); nothing is saved or reloaded.
-    _log(kind, extra) {   // placement debug log, written ONLY if the file $XDG_RUNTIME_DIR/gnome-voice-typing-overlay/debug exists (off by default): ~/.cache/gnome-voice-typing/overlay.log
-        try {
-            if (!GLib.file_test(DIR + '/debug', GLib.FileTest.EXISTS)) return;
-            const f = GLib.get_user_cache_dir() + '/gnome-voice-typing/overlay.log';
-            GLib.mkdir_with_parents(GLib.path_get_dirname(f), 0o755);
-            try { if (GLib.file_test(f, GLib.FileTest.EXISTS) && Gio.File.new_for_path(f).query_info('standard::size', 0, null).get_size() > 300000) GLib.file_set_contents(f, ''); } catch (e) {}
-            const o = Gio.File.new_for_path(f).append_to(Gio.FileCreateFlags.NONE, null);
-            o.write_all(new TextEncoder().encode(`${new Date().toISOString()} ${kind} ${extra || ''}\n`), null); o.close(null);
-        } catch (e) {}
+    _log(kind, extra) {
+        if (this._models?.settings?.developer_logging !== true) return;
+        const tool = this._toolPath('voice-typing-logs'); if (!tool) return;
+        try { Gio.Subprocess.new([tool, 'event', kind, extra || ''], Gio.SubprocessFlags.STDOUT_SILENCE | Gio.SubprocessFlags.STDERR_SILENCE); }
+        catch (e) { console.error('Voice typing diagnostics: ' + e); }
     }
     _area(x, y) {   // work area of the monitor containing (x, y), else primary
         const L = Main.layoutManager;
@@ -811,6 +809,7 @@ export default class VoiceTypingOverlay extends Extension {
 
     _apply(state, level, text, busy) {
         if (!this._bar) return;
+        if (this._loggedState !== state) { this._log('OVERLAY STATE', state); this._loggedState = state; }
         if (state === 'hidden' || state === 'suspended') { if (this._panelOpen) return; this._chimeFor(state); this._hide(); return; }   // suspended: the bar shows nothing
         this._chimeFor(state);
         this._state = state;
@@ -992,6 +991,7 @@ export default class VoiceTypingOverlay extends Extension {
         const P = this._panel; this._rememberScroll(); P.destroy_all_children(); this._spinners = [this._barSpin]; this._dlW = {};
         this._rowActors = {}; this._chipActors = {}; this._devActors = {}; this._micRow = this._soundRow = this._followRow = this._listScroll = this._nzFill = null; this._catActors = {};
         const pg = PAGES.some(x => x[0] === this._page) ? this._page : null; this._page = pg;
+        if (this._loggedPage !== pg) { this._log('SETTINGS PAGE', pg || 'home'); this._loggedPage = pg; }
         this._catSig = this._cat ? JSON.stringify(this._cat.map(e => [e.id, e.state, e.msg || ''])) + this._confirm + JSON.stringify(this._note) : '';
         const loading = this._isLoading(); this._panelLoading = loading;
         const dim = (a) => { if (loading) { a.opacity = 110; a.reactive = false; } return a; };
@@ -1133,6 +1133,7 @@ export default class VoiceTypingOverlay extends Extension {
 
         if (pg === 'appearance') this._appearanceSettings(P, sect);
         if (pg === 'formatting') this._formattingSettings(P, sect);
+        if (pg === 'developer') this._developerSettings(P, sect);
         if (pg === 'vocabulary') this._vocabularySettings(P);
         if (pg === 'shortcuts') this._shortcutSettings(P);
         if (pg === 'setup') P.add_child(this._setupInfo(m, !!depsCard));
@@ -1217,6 +1218,43 @@ export default class VoiceTypingOverlay extends Extension {
     _lightenPanelActor(actor) {
         if (actor.style) actor.style = actor.style.replace(/rgba\(255,\s*255,\s*255,/g, 'rgba(0,0,0,').replace(/#fff(?:fff)?\b/gi, '#171717').replace(/color: #4cc2ff/g, 'color: #006ca0').replace(/color: #ff8a8d/g, 'color: #a51926').replace(/color: #ff9a9c/g, 'color: #a51926');
         for (const child of actor.get_children()) this._lightenPanelActor(child);
+    }
+    _developerSettings(host, sect) {
+        const P = new St.BoxLayout({orientation: Clutter.Orientation.VERTICAL, x_expand: true, style: 'spacing: 8px;'});
+        host.add_child(this._settingsScroll(P));
+        P.add_child(sect('Session diagnostics'));
+        this._prefToggle(P, 'developer_logging', 'Enable developer logging');
+        P.add_child(wrapLbl(lbl('Off by default. Click Save after changing this setting. When enabled, logs include recognized speech, typed text, settings, microphone diagnostics, setup activity and errors. No raw audio is saved and nothing is uploaded.', 9.5, SEC)));
+        P.add_child(wrapLbl(lbl('One readable .txt file per session. A new file starts when logging is enabled, the daemon starts, or dictation opens from closed. Pause/resume stays in the same file. Turning logging off preserves existing files.', 9.5, SEC)));
+        const folder = GLib.get_user_state_dir() + '/gnome-voice-typing/logs';
+        const path = wrapLbl(lbl(folder, 9.5, SEC)); path.clutter_text.selectable = true; P.add_child(path);
+        P.add_child(this._pill('Copy latest log', 'primary', () => this._logAction('text')));
+        P.add_child(this._pill('Open latest log', 'plain', () => this._logAction('latest')));
+        P.add_child(this._pill('Open log folder', 'plain', () => this._logAction('folder')));
+        P.add_child(wrapLbl(lbl('Review speech and personal details before sharing a log. Logs remain until you delete them from the folder.', 9.5, SEC)));
+        if (this._models?.logging_error) P.add_child(wrapLbl(lbl('Could not write the log: ' + this._models.logging_error, 9.5, '#ff9a9c')));
+        if (this._devMessage) P.add_child(wrapLbl(lbl(this._devMessage, 9.5, SEC)));
+    }
+    _logAction(action) {
+        const tool = this._toolPath('voice-typing-logs'); if (!tool) return;
+        try {
+            const p = Gio.Subprocess.new([tool, action], Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE);
+            p.communicate_utf8_async(null, null, (pr, result) => {
+                try {
+                    const [, out, err] = pr.communicate_utf8_finish(result);
+                    if (!this._panel) return;
+                    if (!pr.get_successful()) throw new Error(err.trim() || 'Could not read the log.');
+                    if (action === 'text') {
+                        St.Clipboard.get_default().set_text(St.ClipboardType.CLIPBOARD, out);
+                        this._devMessage = 'Latest session copied. Review it before sharing.';
+                    } else {
+                        Gio.AppInfo.launch_default_for_uri(Gio.File.new_for_path(out.trim()).get_uri(), global.create_app_launch_context(0, -1));
+                        this._devMessage = action === 'folder' ? 'Log folder opened.' : 'Latest session opened.';
+                    }
+                } catch (error) { this._devMessage = String(error.message || error); }
+                if (this._panelOpen && this._page === 'developer') this._buildPanel();
+            });
+        } catch (error) { this._devMessage = String(error.message || error); this._buildPanel(); }
     }
     _formattingSettings(P, sect) {
         this._prefChoice(P, sect, 'punctuation', 'Automatic punctuation', [['model', 'Keep model punctuation'], ['none', 'Remove punctuation']]);
@@ -1331,6 +1369,7 @@ export default class VoiceTypingOverlay extends Extension {
                 formatting: 'Punctuation · capitalization · spacing',
                 vocabulary: 'Preferred words and spellings',
                 shortcuts: 'Start/pause and close dictation',
+                developer: this._models.settings.developer_logging ? 'Session logging on · contains speech' : 'Session logging off · copy and open logs',
                 setup: miss ? `${miss} optional package${miss === 1 ? '' : 's'} missing  ·  uninstall` : 'Optional packages  ·  uninstall',
             };
             for (const [id, name, icon] of PAGES) {

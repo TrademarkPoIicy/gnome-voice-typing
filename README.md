@@ -47,7 +47,7 @@ Open **Setup & uninstall → Refresh package list**. The app resolves optional a
 
 Each click installs exactly one package. Python wheels use `--no-deps`; system packages are downloaded individually and installed locally, with dependency checks still enforced. If a system package needs another listed package first, install that supporting package and retry. No dependency checks are bypassed. The package list is cached locally and can be refreshed when needed. The refresh fetches package metadata and may inspect wheels to resolve requirements; it does not install packages.
 
-Model downloads no longer install Python add-ons or build the GPU engine. Those actions are separate in Setup & uninstall. The main installer installs the core runtime; optional voice-detection and GPU packages are selected from the cog panel. No install-all action is offered for optional packages.
+Model downloads no longer install Python add-ons or build the GPU engine. Those actions are separate in Setup & uninstall. The main installer installs the core runtime; optional voice-detection and GPU packages are selected from the cog panel. Install all is available alongside the individual package buttons.
 
 ## Requirements
 
@@ -140,7 +140,7 @@ shortcut conflicts, asks, then removes only that accelerator from that one setti
 |---|---|
 | `~/.local/share/gnome-voice-typing/` | program, Python environment, GPU engine, models (`models/`), install record |
 | `~/.config/gnome-voice-typing/config.json` | your settings |
-| `~/.local/state/gnome-voice-typing/daemon.log` | log of the background service (no audio, no typed text is stored) |
+| `~/.local/state/gnome-voice-typing/logs/session-*.txt` | optional developer logs, including speech text when enabled |
 | `~/.local/share/gnome-shell/extensions/voice-typing@gnome-voice-typing.github.io/` | the extension |
 | `~/.config/autostart/gnome-voice-typing.desktop` | start at login |
 | `$XDG_RUNTIME_DIR/gnome-voice-typing*` | sockets and small state files (RAM only, gone at reboot) |
@@ -161,7 +161,7 @@ are left alone. Log out and in afterwards so GNOME Shell forgets the extension.
 
 - **Nothing happens when I press the shortcut.** Check the shortcut exists: *Settings > Keyboard > Custom Shortcuts > "Voice typing"*.
   Run `voice-typing status` (prints `{"state": "stopped"}` when the service is not running) and read
-  `~/.local/state/gnome-voice-typing/daemon.log`.
+  the latest session log in Settings → Developer tools.
 - **The bar does not appear.** You need to log out and in once after installing. Check `gnome-extensions list | grep voice-typing`
   and `gnome-extensions info voice-typing@gnome-voice-typing.github.io`; make sure *"disable-user-extensions"* is off.
 - **The bar is listening but nothing is typed.** Run `voice-typing --check`: `uinput writable: False` means the udev rule is missing (re-run
@@ -170,7 +170,7 @@ are left alone. Log out and in afterwards so GNOME Shell forgets the extension.
   that to be restarted once. Electron/Chromium apps (VS Code, Discord, Chrome) only expose text boxes when started with accessibility
   on (e.g. `--force-renderer-accessibility`); otherwise the bar falls back to the bottom of the window.
 - **"Graphics card unavailable, using processor".** The Vulkan engine could not start; the CPU model is used and your choice is kept so
-  the next start tries again. Check `vulkaninfo --summary` and `~/.local/state/gnome-voice-typing/daemon.log`.
+  the next start tries again. Check `vulkaninfo --summary` and the latest session log in Settings → Developer tools.
 - **The GPU build failed.** Logs are in `~/.cache/gnome-voice-typing/build/`. Install the build packages listed above and run `./install.sh --gpu` again, or use `--cpu-only`.
 - **Wrong microphone.** Pick one in the gear panel (or leave it on *System default*).
 - **Download interrupted.** Run `./install.sh` again; downloads resume and are re-verified.
@@ -179,7 +179,7 @@ are left alone. Log out and in afterwards so GNOME Shell forgets the extension.
 ## Privacy
 
 Everything happens on your computer. There is no telemetry, no analytics, no account and no cloud service, and nothing is sent anywhere
-while you dictate. Audio is processed in memory and never written to disk; typed text is not logged. The network is used only
+while you dictate. Audio is processed in memory and never written to disk; speech and typed text are logged only when Developer tools → Enable developer logging is turned on (off by default). The network is used only
 by `install.sh` and `voice-typing-models`: distro package servers, PyPI, GitHub (whisper.cpp source; model archives) and Hugging Face (models),
 all over HTTPS, with SHA-256 / commit-id verification. The program itself does not contact any server.
 
@@ -236,3 +236,25 @@ The initial GitHub installer stays lightweight. Individual package buttons remai
 available for people who prefer to choose each package. Speech models are still
 chosen separately. Failed batch installs show the error and can be retried;
 already installed packages are skipped. System installation may ask for a password.
+
+### Developer session logs (0.1.15)
+
+Open **Settings → Developer tools**, enable developer logging, and click **Save**.
+Reproduce the problem, then use **Copy latest log**, **Open latest log**, or
+**Open log folder**. Each session is one timestamped, readable `.txt` file under
+`~/.local/state/gnome-voice-typing/logs/` (or `$XDG_STATE_HOME/gnome-voice-typing/logs/`).
+Attach that file when reporting a problem; nothing is uploaded automatically.
+
+Logging starts a new file when enabled, on daemon startup, and when dictation opens
+from closed. Pause/resume stays in the same file. Setup helpers and the bubble
+append to the current session. The header records software/environment details;
+events include partial/final speech, formatting, typing attempts and corrections,
+commands, settings changes, sampled microphone/voice-detection diagnostics,
+package operations, GPU build output, errors and Python exception tracebacks.
+This is application diagnostics, not a raw audio recording or a system-wide recorder.
+
+Logging is **off by default**. Turning it off and saving stops new diagnostic entries;
+existing files remain available until you delete them. Files are owner-readable only.
+Review personal dictation and settings before sharing. Long sessions can create large
+files. Native crashes and events before logging was enabled may need separate system
+logs. The explicit `GVT_DRY_RUN` development mode retains its separate legacy log.

@@ -1,6 +1,9 @@
 """gnome-voice-typing daemon: warm speech model, continuous phrase-by-phrase dictation, typed into the focused window.
 States: idle (hidden) -> listening <-> paused -> idle(close). Controlled over a unix socket by bin/dictate."""
 import glob, os, sys, json, socket, threading, queue, time, subprocess, re, signal, datetime, collections, shutil
+import devlog
+devlog.install_exception_hooks('daemon')
+devlog.start('daemon startup')
 import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import audiofx
@@ -116,8 +119,12 @@ RATE = 16000; CHUNK = RATE // 10 * 2     # 100 ms of s16 mono
 DRY = bool(os.environ.get('GVT_DRY_RUN'))      # developer option: log what would be typed instead of typing it
 
 def log(*a):
-    with open(LOG, 'a') as f:
-        f.write(datetime.datetime.now().strftime('%F %T.%f')[:-3] + ' ' + ' '.join(str(x) for x in a) + '\n')
+    fields = {'message': ' '.join(str(x) for x in a)}
+    if sys.exc_info()[0] is not None: fields['traceback'] = __import__('traceback').format_exc()
+    devlog.event('daemon', 'MESSAGE', **fields)
+    if DRY:
+        with open(LOG, 'a') as f:
+            f.write(datetime.datetime.now().isoformat() + ' ' + ' '.join(str(x) for x in a) + '\n')
 
 # ---------------- overlay (state file watched by the GNOME Shell extension) ----------------
 _ovlock = threading.Lock()
@@ -186,8 +193,11 @@ class Typer:
         return ''.join(c for c in unicodedata.normalize('NFKD', seg) if ord(c) < 128)
     def _yd(self, *args, inp=None):
         env = dict(os.environ, YDOTOOL_SOCKET=YSOCK)
+        devlog.event('typing', 'DELIVERY', arguments=list(args))
         subprocess.run([YDOTOOL] + list(args), input=inp, env=env, check=True, timeout=120)
+        devlog.event('typing', 'DELIVERY COMPLETE')
     def type(self, text):
+        devlog.event('typing', 'TEXT REQUEST', text=text)
         for a, b in self.CHARMAP: text = text.replace(a, b)
         if DRY: log('DRY RUN - would type: %r' % text); return 'dry'
         if self.ydotool_ready():
@@ -231,6 +241,7 @@ class Typer:
         self.portal.stdout.readline()
         return 'portal'
     def backspace(self, n):
+        devlog.event('typing', 'BACKSPACE', characters=n)
         if DRY: log('DRY RUN - would backspace %d' % n); return True
         if n <= 0 or not self.ydotool_ready(): return False
         args = ['key']
@@ -294,7 +305,7 @@ class Daemon:
                           'noise_mode': CFG.get('noise_mode', 'auto'), 'silence_threshold': CFG.get('silence_threshold', 0.5), 'noise_suppression': bool(CFG.get('noise_suppression', True)),
                           'noise_floor': CFG.get('noise_floor', 0.0), 'noise_floor_raw': CFG.get('noise_floor_raw', 0.0), 'streaming': CFG.get('streaming', 'auto'),
                           'device': dev_of(cat_entry(self.cur_id)), 'mics': list_mics()},
-             'switch': self.switch, 'last_error': getattr(self, 'last_error', None), 'seq': self.mseq}
+             'logging_error': devlog.last_error, 'switch': self.switch, 'last_error': getattr(self, 'last_error', None), 'seq': self.mseq}
         try:
             with open(OVDIR + '/models.tmp', 'w') as f: json.dump(d, f)
             os.replace(OVDIR + '/models.tmp', OVDIR + '/models.json')
@@ -318,7 +329,12 @@ class Daemon:
             eq = cat_entry(EQUIV.get(self.cur_id))
             mid = eq['id'] if (eq and dev_of(eq) == dev and installed(eq)) else DEFAULTS[dev]
         if dev in ('gpu', 'cpu') and (not mid or mid == self.cur_id) and dev_of(cat_entry(self.cur_id)) == dev: ch['device'] = dev
-        if ch: persist_cfg(**ch); log('settings saved:', ', '.join(ch))
+        if ch:
+            if ch.get('developer_logging') is False: devlog.event('daemon', 'LOGGING DISABLED')
+            was_logging = CFG.get('developer_logging') is True
+            persist_cfg(**ch)
+            if ch.get('developer_logging') is True and not was_logging: devlog.start('logging enabled')
+            devlog.event('daemon', 'SETTINGS CHANGED', changes=ch)
         if mid and mid != self.cur_id:
             if self.switch['status'] == 'loading': return
             ent = next((e for e in CATALOG if e['id'] == mid), None)
@@ -400,7 +416,7 @@ class Daemon:
 
     # --- commands
     def handle(self, msg):
-        c = msg.get('cmd'); log('cmd', c, '(state %s)' % self.state)
+        c = msg.get('cmd'); devlog.event('daemon', 'COMMAND', command=msg, state=self.state)
         if c in ('toggle', 'start', 'pause', 'resume') and self.switch['status'] == 'loading':
             log('ignored (model is loading)'); return json.dumps({'state': self.state, 'loading': True})
         if c == 'open-settings':
@@ -442,6 +458,8 @@ class Daemon:
 
     def start(self, sess):
         if self.state == 'listening': return
+        if self.state == 'idle': devlog.start('dictation opened')
+        devlog.event('daemon', 'LISTENING', previous_state=self.state, microphone=CFG.get('mic', ''), model=self.cur_id)
         self.sess = sess; self.stop.clear(); self.state = 'listening'; self.err_until = 0
         chime('service-login.oga'); self.show(); threading.Thread(target=self.write_models, daemon=True).start()
         self.thread = threading.Thread(target=self.rec_loop, args=(sess,), daemon=True); self.thread.start()
@@ -453,10 +471,12 @@ class Daemon:
 
     def pause(self):
         if self.state != 'listening': return
+        devlog.event('daemon', 'PAUSED')
         self._halt(); self.state = 'paused'; self.paused_at = time.time(); chime('device-removed.oga'); self.show()
 
     def close(self):
         if self.state == 'idle': return
+        devlog.event('daemon', 'DICTATION CLOSED')
         self._halt(); self.state = 'idle'; self.sess = None; self.typer.close(); self.show()
 
     def housekeeping(self):
@@ -492,7 +512,10 @@ class Daemon:
     def rec_loop(self, sess):
         cmd = self._mic_cmd()
         if sess.src: cmd = ['ffmpeg', '-v', 'quiet', '-re', '-i', sess.src, '-af', 'adelay=500,apad=pad_dur=2.5', '-f', 's16le', '-ar', '16000', '-ac', '1', '-']
-        try: rec = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        devlog.event('audio', 'RECORDER START', arguments=cmd)
+        try:
+            rec = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            devlog.capture_lines(rec.stderr, 'audio', 'RECORDER OUTPUT')
         except Exception as e:
             self.error('Microphone unavailable', detail='Open Settings > Microphone & noise and select a connected microphone. Check that it is not muted in system Sound settings, then try again.'); log('recorder failed', repr(e)); self.state = 'paused'; self.show(); return
         end_chunks = max(2, int(round(CFG['end_silence'] * 10)))
@@ -529,6 +552,9 @@ class Daemon:
             fl.update(rms, loud or in_speech)
             self.rms = rms; self.floor = fl.v or 0.0; self.level = min(1.0, (max(0.0, rms - self.floor) / 3000.0) ** 0.5)
             EXTRA['mic'] = self._meter_lv(rms); EXTRA['floor_lv'] = self._meter_lv(manual and float(CFG.get('noise_floor') or 0.0) or self.floor); EXTRA['speech'] = bool(loud)
+            if n_chunks % 10 == 0 or bool(loud) != getattr(self, '_logged_speech', None):
+                devlog.event('audio', 'VOICE DETECTION', rms=rms, floor=self.floor, threshold=e_thr, probability=p, speech=bool(loud), in_phrase=bool(in_speech))
+                self._logged_speech = bool(loud)
             self.show('listening')
             d_asr = d if CFG.get('noise_suppression_asr', True) else d_raw      # the recognizer hears the denoised audio unless noise_suppression_asr is false (voice detection always uses the denoised audio)
             if not in_speech:
@@ -654,6 +680,7 @@ class Daemon:
         t = time.time()
         with ASR_LOCK: text = self.asr.transcribe(audio).strip()
         t1 = time.time(); tt = t1 - t; dur = len(audio) / RATE
+        devlog.event('recognition', 'PARTIAL', text=text, audio_seconds=dur, processing_seconds=tt, model=self.cur_id)
         mode = self._stream_mode(); base = float(CFG.get('stream_interval', 0.4)); mx = 4.0 if mode == 'on' else 3.0
         ph.passes += 1; ph.t_sum += tt; ph.interval = min(mx, max(base, 2.0 * tt)); ph.next_at = t + ph.interval      # at most ~50 % duty: back off as the pass gets slower
         if mode == 'auto' and 2.0 * tt > mx:        # even the slowest allowed pace (a pass every 3 s) would take more than half of the time: this model cannot keep up
@@ -751,7 +778,8 @@ class Daemon:
             return
         tt = time.time() - t
         dur = len(audio) / RATE
-        log('transcribed %.1fs audio in %.2fs (%d chars)%s' % (dur, tt, len(text), (': %r' % text) if DRY else ''))   # typed text is never logged (except in the developer dry-run mode)
+        devlog.event('recognition', 'FINAL', text=text, audio_seconds=dur, processing_seconds=tt, model=self.cur_id)
+        log('transcribed %.1fs audio in %.2fs (%d chars)%s' % (dur, tt, len(text), (': %r' % text) if DRY else ''))   # transcript detail is recorded only by the opt-in developer logger
         if ph is not None and self._stream_mode() == 'auto' and tt > 1.5 and tt > 0.5 * dur and time.time() >= self.stream_block_until:    # the final pass alone was slow: don't probe a model like that with partial passes
             self.stream_block_until = time.time() + 60; log('model too slow to stream (final pass %.1fs for %.1fs of audio): whole-phrase mode for the next 60 s' % (tt, dur))
         if ph is not None and ph.passes: log('stream phrase: %d partial pass(es), avg %.2fs, %d word(s) typed before the end' % (ph.passes, ph.t_sum / ph.passes, len(ph.words)))
@@ -764,6 +792,7 @@ class Daemon:
             if self.typer.backspace(len(self.last_typed)): self.last_typed = ''
             return
         out = postprocess(text)
+        devlog.event('recognition', 'FORMATTED', original=text, formatted=out)
         if sess.first and sess.prefix: out = sess.prefix + out
         sess.first = False
         out += ' ' if out and not out.endswith('\n') and customization.settings(CFG)['trailing_space'] else ''
@@ -783,7 +812,7 @@ def serve():
             msg = json.loads(c.makefile().readline() or '{}')
             c.sendall((D.handle(msg) + '\n').encode())
         except Exception as e:
-            log('ipc error', repr(e))
+            devlog.event('daemon', 'IPC ERROR', traceback=__import__('traceback').format_exc())
             try: c.sendall(b'{"error":"1"}\n')
             except Exception: pass
         finally: c.close()

@@ -1,6 +1,8 @@
 #!/usr/bin/python3
 """Thin hotkey client: sends a command to the warm daemon (starting it if needed)."""
 import os, sys, socket, json, subprocess, time, datetime
+import devlog
+devlog.install_exception_hooks('client')
 N = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RT = os.environ.get('XDG_RUNTIME_DIR') or ('/tmp/gnome-voice-typing-%d' % os.getuid()); SOCK = RT + '/gnome-voice-typing.sock'
 cmd = sys.argv[1] if len(sys.argv) > 1 else 'toggle'
@@ -29,6 +31,7 @@ msg = locals().get('msg') or {'cmd': cmd}
 if cmd == 'testwav':
     msg.update(path=sys.argv[2], prefix=sys.argv[3] if len(sys.argv) > 3 else '', enter=len(sys.argv) > 4 and sys.argv[4] == 'enter')
 def send():
+    devlog.event('client', 'COMMAND', command=msg)
     s = socket.socket(socket.AF_UNIX); s.settimeout(10); s.connect(SOCK)
     s.sendall((json.dumps(msg) + '\n').encode()); r = s.makefile().readline(); s.close(); return r
 try:

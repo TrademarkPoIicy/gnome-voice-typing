@@ -24,6 +24,8 @@ import shlex
 import re
 import fcntl
 import package_plan
+import devlog
+devlog.install_exception_hooks('setup')
 import hashlib, importlib.util, json, os, shutil, signal, socket, subprocess, sys, tarfile, time, urllib.request, urllib.error
 
 N = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -109,6 +111,7 @@ def _pid_is_ours(pid):
         return 'models_tool' in open('/proc/%d/cmdline' % pid).read()
     except Exception: return False
 def write_status(mid, **kw):
+    devlog.event('setup', 'PROGRESS', status_id=mid, **kw)
     os.makedirs(STATUS, exist_ok=True)
     d = dict(kw, id=mid, pid=os.getpid(), t=round(time.time(), 1)); tmp = '%s.tmp.%d' % (_sfile(mid), os.getpid())
     with open(tmp, 'w') as f: json.dump(d, f)
@@ -625,10 +628,18 @@ def _deps_install_one(component):
             try:
                 out = ''
                 for line in p.stdout:
+                    devlog.event('setup', 'ENGINE BUILD', output=line.rstrip())
                     out = (out + line)[-3000:]
                     match = re.search(r'GVT_PROGRESS:(\d+):(.*)', line)
                     if match: st('building', match[2].strip(), pct=int(match[1]))
                 p.wait()
+                if devlog.enabled():
+                    build_dir = os.environ.get('GVT_BUILD_DIR') or os.path.join(os.environ.get('XDG_CACHE_HOME') or os.path.expanduser('~/.cache'), 'gnome-voice-typing/build')
+                    for filename in ('cmake.log', 'build.log', 'shim.log'):
+                        try:
+                            with open(os.path.join(build_dir, filename), errors='replace') as output:
+                                devlog.event('setup', 'ENGINE BUILD LOG', filename=filename, output=output.read())
+                        except OSError: pass
             except BaseException:
                 try: os.killpg(p.pid, signal.SIGTERM)
                 except OSError: pass
@@ -641,6 +652,7 @@ def _deps_install_one(component):
     except Cancelled:
         st('failed', 'Cancelled.'); return 1
     except Exception as e:
+        devlog.event('setup', 'ERROR', component=component, traceback=__import__('traceback').format_exc())
         st('failed', str(e) if isinstance(e, (Fail, RuntimeError)) else friendly(e)); return 1
 
 def deps_ack():
@@ -680,6 +692,8 @@ def status_all():
     return out
 
 def main(a):
+    if a and (a[0] not in ('status', 'list', 'deps') or (a[0] == 'deps' and 'install' in a)):
+        devlog.event('setup', 'COMMAND', arguments=a)
     if not a or a[0] in ('-h', '--help', 'help'): print(__doc__); return 0
     cmd = a[0]; rest = []; opts = {}
     i = 1

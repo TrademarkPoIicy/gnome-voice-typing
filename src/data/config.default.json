@@ -18,5 +18,6 @@
   "trailing_space": true,
   "vocabulary": [],
   "follow_field": false,
-  "settings_theme": "dark"
+  "settings_theme": "dark",
+  "developer_logging": false
 }

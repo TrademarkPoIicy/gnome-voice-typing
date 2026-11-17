@@ -135,8 +135,9 @@ def ov(state, level=0.0, text='', busy=False):
     with _ovlock:
         try:
             tmp = OVDIR + '/state.tmp'
-            with open(OVDIR + '/state.json', 'w') as f:
+            with open(tmp, 'w') as f:
                 json.dump(dict({'state': state, 'level': round(level, 3), 'text': text, 'busy': busy}, **EXTRA), f)
+            os.replace(tmp, OVDIR + '/state.json')
         except Exception: pass
 
 def chime(name):
@@ -302,6 +303,7 @@ class Phrase:
 
 class Daemon:
     def __init__(self):
+        self.models_lock = threading.RLock()
         self.state = 'idle'; self.lock = threading.RLock(); self.stop = threading.Event()
         self.recorder = None; self.monitor_recorder = None; self.monitor_epoch = 0; self.input_warning = ''
         self.thread = None; self.q = queue.Queue(); self.pending = 0; self.asr = None; self.asr_err = None
@@ -323,6 +325,10 @@ class Daemon:
         return mid
 
     def write_models(self):
+        with self.models_lock:
+            self._write_models()
+
+    def _write_models(self):
         if not os.path.isdir(OVDIR): return
         self.mseq += 1
         d = {'cli': N + '/bin/voice-typing', 'current': self.cur_id, 'current_name': self.name_of(self.cur_id),
@@ -441,11 +447,18 @@ class Daemon:
     def show(self, state=None):
         s = state or self.state
         busy = self.pending > 0
-        if EXTRA.get('no_model') and s in ('listening', 'paused', 'starting'): ov('paused', text='No speech model yet')
-        elif s in ('listening', 'paused') and time.time() < self.err_until: ov('error', text=self.err_text)
+        EXTRA['mic_active'] = any(rec is not None and rec.poll() is None for rec in (self.recorder, self.monitor_recorder))
+        EXTRA['transcription_ready'] = self.asr is not None
+        if s in ('listening', 'paused') and time.time() < self.err_until: ov('error', text=self.err_text)
         elif s == 'listening' and self.input_warning: ov('error', text=self.input_warning)
-        elif s == 'listening' and self.asr is None and not self.asr_err: ov('starting', busy=True)
-        elif s in ('listening', 'paused', 'starting'): ov(s, self.level, busy=busy)
+        elif s == 'listening' and EXTRA.get('no_model'):
+            ov('listening', self.level, text='Mic on · no model', busy=False)
+        elif s == 'paused':
+            text = ('Mic preview · no model' if EXTRA.get('no_model') else 'Mic preview') if EXTRA['mic_active'] else ('Paused · no model' if EXTRA.get('no_model') else 'Paused')
+            ov('paused', self.level, text=text, busy=busy)
+        elif s == 'listening' and self.asr is None and self.asr_err: ov('error', text='Speech model unavailable')
+        elif s == 'listening' and self.asr is None: ov('starting', self.level, text='Mic on · model loading', busy=True)
+        elif s in ('listening', 'starting'): ov(s, self.level, busy=busy)
         else: ov('hidden')
 
     def error(self, text, secs=8, detail=''):
@@ -588,6 +601,7 @@ class Daemon:
         fl = audiofx.Floor(); preroll = collections.deque(maxlen=4); phrase = []; in_speech = False; silent = 0; loud_n = 0
         last_speech = time.time(); eof = False; ph = None; n_chunks = 0; silent_input_since = time.monotonic()
         def submit(chunks, trail, ph):
+            if self.asr is None: return
             if loud_n < 3: return                      # blip, ignore
             audio = np.frombuffer(b''.join(chunks[:len(chunks) - max(0, trail - 2)] if trail > 2 else chunks), dtype=np.int16).astype(np.float32) / 32768.0
             if ph is not None:
@@ -629,9 +643,15 @@ class Daemon:
             if n_chunks % 10 == 0 or bool(loud) != getattr(self, '_logged_speech', None):
                 devlog.event('audio', 'VOICE DETECTION', raw_rms=raw_rms, microphone=CFG.get('mic', ''), rms=rms, floor=self.floor, threshold=e_thr, probability=p, speech=bool(loud), in_phrase=bool(in_speech))
                 self._logged_speech = bool(loud)
+            if self.asr is None: self.level = min(1.0, (raw_rms / 3000.0) ** 0.5)
             self.show('listening')
             d_asr = d if CFG.get('noise_suppression_asr', True) else d_raw      # the recognizer hears the denoised audio unless noise_suppression_asr is false (voice detection always uses the denoised audio)
-            if not in_speech:
+            if self.asr is None:
+                # Audio preview is useful before setup; do not queue speech for
+                # a model that does not exist or replay it after a download.
+                if loud: last_speech = now
+                preroll.clear(); phrase = []; in_speech = False; ph = None; loud_n = 0; silent = 0
+            elif not in_speech:
                 preroll.append(d_asr)
                 if loud:
                     in_speech = True; phrase = list(preroll); silent = 0; loud_n = 1; last_speech = now
@@ -852,7 +872,8 @@ class Daemon:
 
     def phrase(self, audio, sess, ph=None):
         while self.asr is None and not self.asr_err and not EXTRA.get('no_model'): time.sleep(0.05)
-        if self.asr is None: self.error('No speech model yet' if EXTRA.get('no_model') else 'Speech model failed to load', detail='Open Settings > Speech model. Download a model, or select a smaller installed model. If the graphics-card model fails, try Processor.'); return
+        if self.asr is None:
+            log('phrase skipped: no recognition model ready'); return
         t = time.time()
         try:
             with ASR_LOCK: text = self.asr.transcribe(audio).strip()  # A model switch holds the same lock.

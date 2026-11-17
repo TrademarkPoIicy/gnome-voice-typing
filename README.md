@@ -268,3 +268,11 @@ Stalled audio streams time out and show a microphone error; five seconds of digi
 silence shows “No microphone signal” and automatically clears when input returns.
 Calibration rejects an input that sends only zero samples. Developer logs include
 raw and processed microphone levels to help distinguish silence from suppression.
+
+### Microphone activity before model setup (0.1.17)
+
+Without a speech model, the bubble shows **Mic on · no model** with an amber
+microphone and a live input level. **Mic preview** identifies the Settings meter
+using the microphone while dictation is paused. The **Install model** link remains
+available. Audio received before a model is ready is not queued for later typing.
+Concurrent Settings status writes are serialized, and bubble state updates are atomic.

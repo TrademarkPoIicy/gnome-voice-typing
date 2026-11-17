@@ -823,11 +823,12 @@ export default class VoiceTypingOverlay extends Extension {
         this._barSpin.visible = loading; this._ensureSpin();
         if (state === 'listening') {
             this._label.text = text || 'Listening…';
-            this._setMic(busy ? '#ffd166' : ACCENT, 'audio-input-microphone-symbolic', '#000', Math.round(level * 5), loading);
+            this._setMic(i.no_model || busy ? '#ffd166' : ACCENT, 'audio-input-microphone-symbolic', '#000', Math.round(level * 5), loading);
         } else if (state === 'starting') {
-            this._label.text = 'Getting ready…'; this._setMic(IDLE_BG, 'audio-input-microphone-symbolic', this._appearance().theme === 'light' ? '#333' : '#e8e8e8', 0, loading);
+            this._label.text = text || 'Getting ready…'; this._setMic(IDLE_BG, 'audio-input-microphone-symbolic', this._appearance().theme === 'light' ? '#333' : '#e8e8e8', 0, loading);
         } else if (state === 'paused') {
-            this._label.text = text || 'Paused'; this._setMic(IDLE_BG, 'microphone-disabled-symbolic', this._appearance().theme === 'light' ? '#333' : '#e8e8e8', 0, loading);
+            this._label.text = text || 'Paused';
+            this._setMic(i.mic_active ? '#ffd166' : IDLE_BG, i.mic_active ? 'audio-input-microphone-symbolic' : 'microphone-disabled-symbolic', i.mic_active ? '#000' : this._appearance().theme === 'light' ? '#333' : '#e8e8e8', i.mic_active ? Math.round(level * 5) : 0, loading);
         } else {
             this._label.text = text || 'Something went wrong'; this._setMic('#e5484d', 'dialog-warning-symbolic', '#fff', 0, false);
         }
@@ -1131,6 +1132,7 @@ export default class VoiceTypingOverlay extends Extension {
         }
         }
 
+        if (pg === 'mic' && this._info.no_model) P.add_child(wrapLbl(lbl('Microphone preview works without a model. Install a model in Speech model to turn detected speech into text.', 9.5, SEC)));
         if (pg === 'appearance') this._appearanceSettings(P, sect);
         if (pg === 'formatting') this._formattingSettings(P, sect);
         if (pg === 'developer') this._developerSettings(P, sect);

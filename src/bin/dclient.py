@@ -5,7 +5,7 @@ N = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RT = os.environ.get('XDG_RUNTIME_DIR') or ('/tmp/gnome-voice-typing-%d' % os.getuid()); SOCK = RT + '/gnome-voice-typing.sock'
 cmd = sys.argv[1] if len(sys.argv) > 1 else 'toggle'
 if cmd in ('preferences', 'settings'):
-    os.execv('/usr/bin/python3', ['/usr/bin/python3', N + '/bin/preferences.py'])
+    cmd = 'open-settings'
 HELP = """usage: voice-typing [toggle|start|pause|resume|close|status|quit]
        voice-typing --models | --model <id> | --apply '{"device":"cpu"}' | --apply '{"sounds":false}' | --check
   preferences  open appearance, formatting, vocabulary and shortcut settings
@@ -23,7 +23,7 @@ if cmd == '--model':
     msg = {'cmd': 'apply', 'model': sys.argv[2]}; cmd = 'apply'
 elif cmd == '--apply':
     msg = dict(json.loads(sys.argv[2]), cmd='apply'); cmd = 'apply'
-if cmd not in ('apply', 'models', 'toggle', 'start', 'pause', 'resume', 'close', 'status', 'quit', 'testwav', 'calibrate', 'meter', 'preferences'):
+if cmd not in ('apply', 'models', 'toggle', 'start', 'pause', 'resume', 'close', 'status', 'quit', 'testwav', 'calibrate', 'meter', 'preferences', 'open-settings'):
     print(HELP); sys.exit(2)
 msg = locals().get('msg') or {'cmd': cmd}
 if cmd == 'testwav':

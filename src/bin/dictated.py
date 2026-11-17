@@ -403,13 +403,18 @@ class Daemon:
         c = msg.get('cmd'); log('cmd', c, '(state %s)' % self.state)
         if c in ('toggle', 'start', 'pause', 'resume') and self.switch['status'] == 'loading':
             log('ignored (model is loading)'); return json.dumps({'state': self.state, 'loading': True})
+        if c == 'open-settings':
+            if self.state == 'listening': self.pause()
+            if self.state == 'idle': self.state = 'paused'
+            EXTRA['settings_request'] = time.time(); self.write_models(); self.show()
+            return json.dumps({'ok': True})
         if c == 'preferences': return json.dumps({'settings': customization.settings(CFG)})
         if c == 'models':
             self.write_models(); return json.dumps({'current': self.cur_id, 'models': [dict(e, installed=installed(e)) for e in CATALOG], 'switch': self.switch, 'settings': {'auto_pause_seconds': CFG['auto_pause_seconds'], 'mic': CFG.get('mic', ''), 'device': dev_of(cat_entry(self.cur_id))}})
         if c == 'apply':
             try: self.apply(msg)
             except (ValueError, OSError) as e: return json.dumps({'error': 'Settings were not saved: ' + str(e)})
-            return json.dumps({'ok': True, 'switch': self.switch})
+            return json.dumps({'ok': True, 'switch': self.switch, 'preferences': customization.settings(CFG)})
         if c == 'calibrate': return json.dumps(self.calibrate())
         if c == 'meter': self.meter(); return json.dumps({'state': self.state, 'rms': round(self.rms, 1), 'floor': round(self.floor, 1)})
         with self.lock:

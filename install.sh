@@ -140,8 +140,8 @@ if [ "$PM" = apt ] && have apt-cache; then
   YDV="$(apt-cache policy ydotool 2>/dev/null | awk '/Candidate:/ {print $2}')"
   case "$YDV" in ""|"(none)"|0.*) YD_BUILD=1; RUNTIME="${RUNTIME/ ydotool/}"; say "This distribution packages ydotool ${YDV:-(none)} (too old: 1.x is needed); ydotool 1.0.4 will be built from source (AGPL-3.0).";; esac
 fi
-WANT="$RUNTIME"; [ "$USE_GPU" = 1 ] && WANT="$WANT $BUILD $GPUPKG"
-if [ "$YD_BUILD" = 1 ] && [ "$USE_GPU" != 1 ]; then WANT="$WANT git cmake g++ make"; fi
+WANT="$RUNTIME"  # Optional GPU packages are selected individually in the cog panel.
+if [ "$YD_BUILD" = 1 ]; then WANT="$WANT git cmake g++ make"; fi
 MISSING=''
 for p in $WANT; do $PQ "$p" >/dev/null 2>&1 || MISSING="$MISSING $p"; done
 MISSING="${MISSING# }"
@@ -173,6 +173,7 @@ if [ -e "$DATA" ]; then say "Existing install found: upgrading the program files
 mkdir_p "$DATA" "$CONF" "$STATE_DIR" "$LOCALBIN"
 if [ "$DRY" = 1 ]; then dry "copy src/{bin,gpu,sounds,data,lib} -> $DATA, uninstall.sh -> $DATA/uninstall.sh, license files -> $DATA/"; else
   for d in bin gpu sounds data lib; do mkdir -p "$DATA/$d"; cp -a "$SRC/src/$d/." "$DATA/$d/"; done
+  rm -f "$DATA/bin/preferences.py"  # retired standalone window; settings now live in the cog panel
   [ -e "$DATA/gpu/lib" ] || mkdir -p "$DATA/gpu/lib"
   cp -a "$SRC/uninstall.sh" "$DATA/uninstall.sh"; mkdir -p "$DATA/scripts"; cp -a "$SRC/scripts/." "$DATA/scripts/"; cp -a "$SRC/VERSION" "$SRC/LICENSE" "$SRC/THIRD_PARTY_LICENSES.md" "$DATA/"
   chmod +x "$DATA"/bin/* "$DATA/uninstall.sh" "$DATA"/scripts/*.sh; mkdir -p "$DATA/models"
@@ -235,34 +236,16 @@ else
   [ "$VENV_OK" = 1 ] || die "Could not create the Python environment. See the messages above."
 fi
 
-# optional: Silero voice detection (needs onnxruntime + faster-whisper, which ships the Silero model) - better than the loudness-based detector
+# Optional speech add-ons and every supporting library are selected in the cog panel.
 VADPKG="onnxruntime faster-whisper"
-if [ "$DRY" = 1 ]; then dry "offer each optional Python package separately: $VADPKG"
-elif [ -x "$DATA/venv/bin/python" ]; then
-  for VADONE in $VADPKG; do
-    VADMODULE="${VADONE//-/_}"
-    if "$DATA/venv/bin/python" -c "import $VADMODULE" 2>/dev/null; then ok "$VADONE already installed."; continue; fi
-    say "Optional app package: $VADONE (required dependencies may also be downloaded; no administrator rights)."
-    if ask "Install $VADONE?" n; then
-      "$DATA/venv/bin/python" -m pip --version >/dev/null 2>&1 || "$DATA/venv/bin/python" -m ensurepip --quiet >/dev/null 2>&1
-      if "$DATA/venv/bin/python" -m pip install --quiet --disable-pip-version-check "$VADONE" && "$DATA/venv/bin/python" -c "import $VADMODULE"; then ok "$VADONE installed."
-      else warn "Could not install $VADONE. Later: Settings > Setup & uninstall > $VADONE > Install."; fi
-    else say "Skipped $VADONE. You can install it individually in Settings > Setup & uninstall."; fi
-  done
-fi
+say "Optional voice-detection packages are available in Settings > Setup & uninstall."
+say "Refresh the package list there, then install each package individually with its own progress bar."
 
 # ---------------------------------------------------------------- 5. GPU engine
 step "5/10 Speech engine"
 if [ "$USE_GPU" = 1 ]; then
-  if [ "$DRY" = 1 ]; then dry "scripts/build-gpu.sh  (pinned whisper.cpp commit, Vulkan, built into $DATA/gpu; log in ~/.cache/$APP/build)"
-  elif [ -f "$DATA/gpu/libasrshim.so" ] && "$DATA/venv/bin/python" "$DATA/gpu/backend.py" --probe >/dev/null 2>&1; then ok "GPU engine already built and working."
-  else
-    say "Building the GPU engine (this takes a while; build log: ~/.cache/$APP/build/build.log) ..."
-    if "$DATA/scripts/build-gpu.sh" "$DATA"; then
-      if G="$("$DATA/venv/bin/python" "$DATA/gpu/backend.py" --probe 2>/dev/null)"; then ok "GPU engine works: $G"
-      else warn "The GPU engine was built but no usable Vulkan graphics card was found: using the CPU engine."; USE_GPU=0; fi
-    else warn "Building the GPU engine failed (see ~/.cache/$APP/build/*.log). Using the CPU engine instead; re-run ./install.sh --gpu to retry."; USE_GPU=0; fi
-  fi
+  if [ -f "$DATA/gpu/libasrshim.so" ]; then ok "Keeping the existing graphics-card engine."
+  else say "Set up the graphics-card engine in Settings > Setup & uninstall. Its packages are listed individually."; fi
 else say "Using the CPU engine (sherpa-onnx). Nothing to build."; fi
 
 # ---------------------------------------------------------------- 6. models
@@ -343,7 +326,7 @@ PYE
     state_set extension_installed true
   fi
   ok "Extension files: $EXTDIR"
-  # A routine upgrade must keep the shortcut chosen in Personalization (including disabled).
+  # A routine upgrade must keep the shortcut chosen in the cog panel (including disabled).
   if [ "$BINDING_EXPLICIT" = 0 ] && [ -f "$STATE" ]; then
     BINDING="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("gnome", {}).get("binding", "<Super>h"))' "$STATE")"
     [ -n "$BINDING" ] || NO_KEYBIND=1

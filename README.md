@@ -29,23 +29,25 @@ the text box you are typing in.
   fetches, checksum-verifies and installs it, with a progress bar and Cancel. Installed models show **Uninstall** (not available for
   the model in use).
 
-## Optional packages
+## Settings in the cog panel
 
-Open **Settings > Setup & uninstall** to choose packages individually. Each row explains its purpose and whether it needs a password. Voice-detection add-ons (`onnxruntime` and `faster-whisper`) are listed separately; both are needed for Silero detection. Installing a package may also install dependencies required by that package. The terminal installer asks about each optional Python add-on separately, defaulting to Skip. RNNoise is available from the package list on supported distributions and is no longer bundled with required system packages.
-
-## Personalization
-
-Open the gear menu and choose **Personalization → Open Personalization**, or run `voice-typing preferences`.
-The editor pauses active dictation so you can type into its fields safely. Resume with your shortcut when finished.
+Click the cog on the dictation bar. **Appearance**, **Dictation formatting**, **Custom vocabulary**, and **Keyboard shortcuts** are categories inside that panel. There is no separate Personalization window. `voice-typing preferences` opens the same cog panel.
 
 - **Appearance:** dark, light or high-contrast bar; compact, comfortable or large text/buttons; background opacity; show/hide the model name. Setup/loading messages remain visible. Bar placement still lives in **Typing & sounds**.
-- **Formatting:** keep or remove model punctuation, preserve capitalization or capitalize sentence starts/use lowercase, convert spoken punctuation, and choose whether to add a space after each phrase. “New line” and “new paragraph” still work.
-- **Vocabulary:** add up to 200 “heard phrase → preferred text” rules, for example `open ai → OpenAI`. Matches ignore case, respect word boundaries, prioritize longer matches, and preserve the preferred spelling. Rules replace recognized text; they do not retrain the model. Test them in the Formatting preview.
-- **Shortcuts:** record or disable start/pause and close shortcuts. Conflicting shortcuts are rejected without changing other apps. Use **Save shortcuts** to apply them immediately; routine upgrades preserve your choice.
+- **Dictation formatting:** keep or remove model punctuation, preserve capitalization or capitalize sentence starts/use lowercase, convert spoken punctuation, and choose whether to add a space after each phrase. “New line” and “new paragraph” still work.
+- **Custom vocabulary:** edit “heard phrase → preferred text” rules directly in the panel. Dictation pauses while you enter text. Use **Done editing**, then **Save**. Matches ignore case, respect word boundaries, prioritize longer matches, and preserve preferred spelling. Rules replace recognized text; they do not retrain the model.
+- **Keyboard shortcuts:** record or disable start/pause and close shortcuts, then **Save shortcuts**. Conflicts are rejected without changing other apps. Routine upgrades preserve your choices.
+- **Microphone & noise:** click the microphone dropdown to see all available microphones and choose one, then **Save**. A disconnected selection is labeled explicitly.
 
-Use **Save personalization** for appearance, formatting and vocabulary. Appearance updates immediately while the service is running; text settings apply to subsequent phrases. Custom formatting or vocabulary uses complete phrases instead of incremental typing, so replacements cannot be split across partial results. With default text settings, incremental typing is unchanged. Settings are stored locally in `~/.config/gnome-voice-typing/config.json` (or `$XDG_CONFIG_HOME`).
+Appearance, formatting and vocabulary use the panel’s **Save** button. Changes are confirmed by the service before the button reports success. Custom formatting and vocabulary use complete phrases instead of incremental typing. Settings stay local in `~/.config/gnome-voice-typing/config.json` (or `$XDG_CONFIG_HOME`). Actionable errors remain under **Setup & uninstall** until dismissed.
 
-Errors remain available under **Settings → Setup & uninstall**, with steps for checking microphone selection, speech models or typing permissions. Dictated text and vocabulary entries are not included in settings-change logs.
+## Optional packages
+
+Open **Setup & uninstall → Refresh package list**. The app resolves optional add-ons and their supporting libraries without installing them. Each missing package gets its own **Install** button and download progress bar. A percentage is shown when the server supplies the download size, followed by an Installing stage. Installed packages disappear from this list and stay absent after reopening Settings or restarting; the package database is the source of truth.
+
+Each click installs exactly one package. Python wheels use `--no-deps`; system packages are downloaded individually and installed locally, with dependency checks still enforced. If a system package needs another listed package first, install that supporting package and retry. No dependency checks are bypassed. The package list is cached locally and can be refreshed when needed. The refresh fetches package metadata and may inspect wheels to resolve requirements; it does not install packages.
+
+Model downloads no longer install Python add-ons or build the GPU engine. Those actions are separate in Setup & uninstall. The main installer installs the core runtime; optional voice-detection and GPU packages are selected from the cog panel. No install-all action is offered for optional packages.
 
 ## Requirements
 
@@ -56,8 +58,7 @@ Errors remain available under **Settings → Setup & uninstall**, with steps for
 - Optional: a Vulkan-capable graphics card for the fast GPU engine. Without one the installer uses the CPU engine.
 
 The installer installs missing system packages for you (Fedora/dnf, Debian and Ubuntu/apt, Arch/pacman): `python3`, `ydotool`,
-`wl-clipboard`, PipeWire and PulseAudio command-line tools, AT-SPI bindings and, for the GPU engine, `cmake`, a C++ compiler,
-`glslc` and the Vulkan development files. It asks first.
+`wl-clipboard`, PipeWire and PulseAudio command-line tools, AT-SPI and GTK bindings. It asks first. Optional GPU build tools and libraries are listed separately in the cog panel.
 
 ## Install
 
@@ -89,7 +90,7 @@ cd gnome-voice-typing
    ydotool 0.1.x (Ubuntu 24.04, Debian 12), ydotool 1.0.4 is built from source instead (no sudo).
 3. Copies the program to `~/.local/share/gnome-voice-typing` and links `voice-typing` into `~/.local/bin`.
 4. Creates a private Python environment there and installs `numpy` and `sherpa-onnx`.
-5. GPU only: downloads whisper.cpp at one pinned commit and compiles it with Vulkan (5-15 minutes, no sudo).
+5. Keeps an existing GPU engine. New GPU packages and the engine build are selected individually in Settings > Setup & uninstall.
 6. Downloads the speech model(s) from their official hosts and verifies the SHA-256 of every file.
 7. Writes your settings to `~/.config/gnome-voice-typing/config.json` (never overwrites an existing one).
 8. Only if `/dev/uinput` is not already usable, and only if you agree: installs a udev rule (explained below).
@@ -129,7 +130,7 @@ shortcut conflicts, asks, then removes only that accelerator from that one setti
 - Command line: `voice-typing toggle | pause | resume | close | status | quit`, `voice-typing --models`,
   `voice-typing --model parakeet`, `voice-typing --apply '{"device":"cpu"}'`, `voice-typing --apply '{"sounds":false}'`.
   Model management: `voice-typing-models list | status | install ID | cancel ID | remove ID | verify | adopt`.
-  Packages: **Settings > Setup & uninstall** lists individual system packages, Python add-ons, typing permission and the graphics-card engine, each with its own **Install** button or **Installed** status. Only the selected item and its required dependencies are installed. Engine builds do not download speech models. From a terminal, `voice-typing-models deps` lists component IDs and `voice-typing-models deps install COMPONENT` installs one item—for example `python:onnxruntime` or `system:rnnoise`. There is no install-all action.
+  Packages: **Settings > Setup & uninstall** lists individual system packages, Python add-ons, typing permission and the graphics-card engine, including supporting libraries, each with its own **Install** button. Only the selected package is installed. Installed packages stay hidden from the install list. Engine builds do not download speech models. From a terminal, `voice-typing-models deps` lists component IDs and `voice-typing-models deps install COMPONENT` installs one item—for example `python:onnxruntime` or `system:rnnoise`. There is no install-all action.
 - Accented and non-English characters are typed through the clipboard (`Ctrl+V`, or `Ctrl+Shift+V` in terminals); your clipboard is
   restored afterwards. In pop-up boxes that refuse clipboard access, accents fall back to plain letters ("café" becomes "cafe").
 

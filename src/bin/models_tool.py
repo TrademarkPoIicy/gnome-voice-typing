@@ -22,6 +22,7 @@ A model counts as installed only when EVERY file listed in the registry exists w
 """
 import shlex
 import fcntl
+import package_plan
 import hashlib, importlib.util, json, os, shutil, signal, socket, subprocess, sys, tarfile, time, urllib.request, urllib.error
 
 N = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -212,30 +213,8 @@ def safe_extract(tf, dest, top):
         try: tf.extract(m, dest, filter='data')
         except TypeError: tf.extract(m, dest)      # Python < 3.12
 
-def ensure_pkg(mid, job):
-    if REG[mid].get('needs') != 'faster-whisper' or importlib.util.find_spec('faster_whisper'): return
-    job.set('installing', 'Installing the faster-whisper add-on (needed for this model)...')
-    p = subprocess.run([sys.executable, '-m', 'pip', 'install', '--quiet', 'faster-whisper'], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-    if p.returncode: raise Fail("Couldn't install the faster-whisper add-on (pip failed). Check your internet connection and press Retry.")
-    importlib.invalidate_caches()
-
 def engine_tools_missing():
     return [t for t in ('git', 'cmake', 'c++', 'glslc') if not shutil.which(t)]
-def ensure_engine(mid, job):
-    if setup_needed(mid) != 'engine': return
-    script = N + '/scripts/build-gpu.sh'
-    if not os.path.exists(script): raise Fail("The graphics-card engine isn't built and its build script is missing. Re-run install.sh.")
-    job.set('building', 'Building the graphics-card engine (a few minutes)...')
-    p = subprocess.Popen(['bash', script, N], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, stdin=subprocess.DEVNULL, start_new_session=True)
-    try: out = p.communicate()[0]
-    except BaseException:
-        try: os.killpg(p.pid, signal.SIGTERM)
-        except OSError: pass
-        raise
-    if p.returncode or not os.path.exists(N + '/gpu/libasrshim.so'):
-        print(out[-1500:], file=sys.stderr)
-        raise Fail("Couldn't build the graphics-card engine (see the log from voice-typing-models install %s). Re-run install.sh to set up the build tools." % mid)
-
 def write_marker(mid):
     os.makedirs(MARK, exist_ok=True)
     d = {'id': mid, 'fingerprint': fingerprint(mid), 'files': {rel: size for rel, size, _ in expected(mid)}, 'verified': time.strftime('%F %T'), 'by': 'models_tool 0.1.1'}
@@ -278,9 +257,6 @@ def install(mid, dry=False, force=False):
         if st == 'missing' or force:
             free = shutil.disk_usage(MODELS).free; need = int(total_size(mid) * (2.3 if 'archive' in r else 1.05))
             if free < need: raise Fail('Not enough free disk space: this model needs about %s and %s is free.' % (human(need), human(free)))
-        if setup_needed(mid) == 'engine':
-            miss = engine_tools_missing()
-            if miss: raise Fail("The graphics-card engine isn't built yet and its build tools are missing (%s). Re-run install.sh, or install them and press Retry." % ', '.join(miss))
         if st == 'unverified' and not force:
             job.set('verifying', 'Checking the files already on disk...')
             ok, bad = verify_files(mid, job, delete_bad=True)
@@ -292,8 +268,8 @@ def install(mid, dry=False, force=False):
             if not files_ok(mid): raise Fail('The files were not all installed correctly. Press Retry.')
             _critical = True; write_marker(mid); _critical = False
         shutil.rmtree(STAGE + '/' + mid, ignore_errors=True)
-        ensure_pkg(mid, job); ensure_engine(mid, job)
-        print('  installed:', mid)
+        if setup_needed(mid): print('  Model files downloaded. Complete the separate package/engine setup in Settings > Setup & uninstall.')
+        else: print('  installed:', mid)
         clear_status(mid)
     except Cancelled:
         clear_status(mid); print('\n  cancelled: %s (what was downloaded is kept, so Download continues where it stopped)' % mid)
@@ -412,6 +388,7 @@ def cancel(mid):
 DEPS_ID = '_deps'
 XDG_CONFIG = os.environ.get('XDG_CONFIG_HOME') or os.path.expanduser('~/.config')
 DISMISS = XDG_CONFIG + '/gnome-voice-typing/deps-dismissed.json'
+PACKAGE_PLAN = MODELS + '/.packages-plan.json'
 def _sysdeps():
     try: return json.load(open(N + '/data/sysdeps.json'))
     except Exception: return {}
@@ -488,47 +465,48 @@ def deps_status():
             'needed': bool(missing) or bool(miss_pip) or perm or (gpu is not False and not built and not miss_gpu and bool(q)),
             'dismissed': dismissed, 'job': s}
     d['components'] = deps_components(d)
+    d['total'] = len(d['components']); d['needed'] = bool(d['components'])
     return d
 
 
 def deps_components(d):
-    """An explicit allowlist of independently installable packages and setup actions."""
-    spec = _sysdeps().get(d['pm'] or '', {})
+    """Only missing packages are offered, based on actual installed state, not session flags."""
+    py = N + '/venv/bin/python'
+    plan = package_plan.load(PACKAGE_PLAN, py)
+    d['plan_ready'] = plan is not None
     rows = []
-    seen = set()
-    groups = [('typing', 'Types dictated text into other applications.', d['missing_typing']),
-              ('noise', 'Optional background-noise suppression.', d['missing_noise'])]
-    if d['gpu'] is not False and not d['engine_built']:
-        groups.append(('gpu', 'Prerequisite for building the optional graphics-card engine.', d['missing_gpu']))
-    for group, description, missing in groups:
-        for package in spec.get(group, []):
-            if package in seen: continue
-            seen.add(package)
-            command = spec.get('install', []) + [package]
-            rows.append({'id': 'system:' + package, 'name': package, 'description': description,
-                         'installed': package not in missing, 'kind': 'system', 'package': package,
-                         'can_install': d['pkexec'], 'manual': shlex.join(['sudo'] + command),
-                         'note': 'System package · asks for your password. Required dependencies may also be installed.'})
-    descriptions = {'onnxruntime': 'Runs the optional voice-activity detector.',
-                    'faster-whisper': 'Provides the Silero voice-detection model and supports Whisper CPU models.'}
+    try: inventory = package_plan.python_inventory(py)
+    except Exception:
+        d['check_error'] = 'Could not read the app’s installed packages. Repair the Python environment with the main installer, then refresh this list.'
+        return []
+    try:
+        pip_ready = subprocess.run([py, '-m', 'pip', '--version'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10).returncode == 0
+    except OSError: pip_ready = False
+    if not pip_ready:
+        rows.append({'id': 'bootstrap:pip', 'name': 'pip', 'kind': 'bootstrap', 'installed': False, 'can_install': True,
+                     'description': 'Package installer for the app’s private Python environment.', 'note': 'Installs only the bundled pip package. No download required.'})
+    if plan:
+        for item in plan['items']:
+            if package_plan.installed(item, py, d['pm'], inventory): continue
+            rows.append(dict(item, installed=False, can_install=(item['kind'] == 'python' or d['pkexec']),
+                             note='Installs only this package. Supporting libraries have their own buttons.'))
+    planned = {item['id'] for item in (plan or {}).get('items', [])}
+    for package in d['missing']:
+        if 'system:' + package not in planned:
+            rows.append({'id': 'system:' + package, 'name': package, 'kind': 'system', 'installed': False, 'can_install': False,
+                         'description': 'System package.', 'note': 'Refresh the package list to include its supporting libraries.'})
     for package in _sysdeps().get('pip', {}).get('vad', []):
-        rows.append({'id': 'python:' + package, 'name': package, 'kind': 'python', 'package': package,
-                     'description': descriptions.get(package, 'Optional Python add-on.'),
-                     'installed': package not in d['missing_pip'], 'can_install': True,
-                     'note': 'App-only package · no password. Required dependencies may also be installed.'})
-    rows.append({'id': 'permission', 'name': 'Typing permission', 'kind': 'permission',
-                 'description': 'Allows the virtual keyboard to type into other applications.',
-                 'installed': not d['missing_perm'], 'can_install': d['pkexec'],
-                 'manual': shlex.join(['sudo', 'sh', '-c', _uinput_script()]),
-                 'note': 'One-time system rule · asks for your password.'})
-    if d['gpu'] is not False:
-        rows.append({'id': 'engine', 'name': 'Graphics-card engine', 'kind': 'engine',
-                     'description': 'Optional faster recognition using Vulkan. Speech models are downloaded separately.',
-                     'installed': d['engine_built'], 'can_install': not d['missing_gpu'],
-                     'note': ('Install these prerequisites first: ' + ', '.join(d['missing_gpu'])) if d['missing_gpu']
-                             else 'Builds locally; may take several minutes. No model is downloaded.'})
+        key = package_plan.canonical(package)
+        if key not in inventory and 'python:' + key not in planned:
+            rows.append({'id': 'python:' + key, 'name': package, 'kind': 'python', 'installed': False, 'can_install': False,
+                         'description': 'Optional voice-detection package.', 'note': 'Refresh the package list to include all supporting libraries.'})
+    if d['missing_perm']:
+        rows.append({'id': 'permission', 'name': 'Typing permission', 'kind': 'permission', 'installed': False, 'can_install': d['pkexec'],
+                     'description': 'Allows the virtual keyboard to type into applications.', 'note': 'One-time system rule; asks for your password.'})
+    if d['gpu'] is not False and not d['engine_built']:
+        rows.append({'id': 'engine', 'name': 'Graphics-card engine', 'kind': 'engine', 'installed': False, 'can_install': not d['missing_gpu'],
+                     'description': 'Optional faster recognition using Vulkan.', 'note': 'Install the listed build packages first. No models or packages are installed by this build.'})
     return rows
-
 
 def deps_install(component=None):
     if not component:
@@ -544,55 +522,45 @@ def deps_install(component=None):
 
 
 def _deps_install_one(component):
-    """Install a single allowlisted target. Never chain unrelated optional installs."""
     signal.signal(signal.SIGTERM, _on_term)
-    def st(status, msg):
-        write_status(DEPS_ID, status=status, msg=msg, component=component)
+    def st(status, msg, **extra):
+        write_status(DEPS_ID, status=status, msg=msg, component=component, **extra)
         print('  ' + msg, flush=True)
     try:
-        st('installing', 'Checking the selected package or component…')
+        st('installing', 'Checking package requirements…', pct=0)
+        py = N + '/venv/bin/python'
+        if not os.path.exists(py): raise Fail('The app’s Python environment is missing. Run the main installer to repair it.')
         d = deps_status()
-        item = next((e for e in d['components'] if e['id'] == component), None)
-        if item is None: raise Fail('Unknown setup component. Reopen Settings and choose one of the listed packages.')
-        name = item['name']
-        if item['installed']:
-            st('done', name + ' is already installed.'); return 0
-        if not item['can_install']:
-            raise Fail(item.get('manual') and 'Run this in a terminal: ' + item['manual'] or item['note'])
-        kind = item['kind']
-        if kind in ('system', 'permission'):
-            spec = _sysdeps().get(d['pm'] or '', {})
-            command = ['pkexec', 'sh', '-c', _uinput_script()] if kind == 'permission' else ['pkexec'] + spec['install'] + [item['package']]
-            st('installing', 'Waiting for your password to install ' + name + '…')
-            if kind == 'system' and d['pm'] == 'apt':
-                subprocess.run(['pkexec', 'apt-get', 'update'], stdin=subprocess.DEVNULL)
-            p = subprocess.run(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-            if p.returncode in (126, 127): raise Fail('The password prompt was cancelled. ' + name + ' was not installed.')
-            if p.returncode:
-                print(p.stdout[-1500:], file=sys.stderr)
-                raise Fail('Could not install ' + name + '. Try again, or run: ' + item['manual'])
-            if kind == 'permission':
-                _record_udev()
-                time.sleep(1)
-                if not uinput_ok():
-                    st('done', 'Typing permission was added. Log out and back in to activate it.'); return 0
-            elif not _pkg_installed(spec['query'], item['package']):
-                raise Fail(name + ' is still unavailable. Check your package manager and try again.')
-        elif kind == 'python':
-            package = item['package']
-            st('installing', 'Downloading ' + name + ' and its required dependencies…')
-            py = N + '/venv/bin/python'
-            if not os.path.exists(py): raise Fail('The app’s Python environment is missing. Run the main installer to repair it first.')
-            if subprocess.run([py, '-m', 'pip', '--version'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode:
-                subprocess.run([py, '-m', 'ensurepip'], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            p = subprocess.run([py, '-m', 'pip', 'install', '--quiet', '--disable-pip-version-check', package],
-                               stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-            if p.returncode or package in vad_pip_missing():
-                print(p.stdout[-1500:], file=sys.stderr)
-                raise Fail('Could not install ' + name + '. Check your internet connection and try again.')
-        elif kind == 'engine':
+        if component == 'catalog':
+            package_plan.resolve(PACKAGE_PLAN, py, d['pm'], d['missing'], _sysdeps().get('pip', {}).get('vad', []), lambda message: st('installing', message))
+            st('done', 'Package list refreshed. Choose the packages you want to install.'); return 0
+        if component == 'bootstrap:pip':
+            st('installing', 'Installing the bundled pip package…', pct=100)
+            package_plan.run([py, '-m', 'ensurepip'])
+            st('done', 'pip installed.', pct=100); return 0
+        if component.startswith(('system:', 'python:')):
+            plan = package_plan.load(PACKAGE_PLAN, py)
+            item = next((e for e in (plan or {}).get('items', []) if e['id'] == component), None)
+            if item is None: raise Fail('Refresh the package list first. Each supporting package will get its own Install button.')
+            if package_plan.installed(item, py, d['pm']):
+                st('done', item['name'] + ' is already installed.', pct=100); return 0
+            def progress(pct, got, total):
+                message = ('Installing ' if pct == 100 else 'Downloading ') + item['name']
+                if pct is not None: message += ' · ' + str(pct) + '%'
+                st('installing' if pct == 100 else 'downloading', message, pct=pct, got=got, total=total)
+            package_plan.install_one(item, py, d['pm'], progress)
+            st('done', item['name'] + ' installed.', pct=100); return 0
+        if component == 'permission':
+            if not d['missing_perm']: st('done', 'Typing permission is already active.'); return 0
+            if not d['pkexec']: raise Fail('A graphical password prompt (pkexec) is required to add the typing rule.')
+            st('installing', 'Waiting for your password to add typing permission…')
+            package_plan.run(['pkexec', 'sh', '-c', _uinput_script()])
+            _record_udev()
+            st('done', 'Typing permission added. Log out and back in if it is not active yet.'); return 0
+        if component == 'engine':
+            if engine_built(): st('done', 'The graphics-card engine is already built.'); return 0
             missing_tools = engine_tools_missing()
-            if missing_tools: raise Fail('Install these prerequisites first: ' + ', '.join(missing_tools))
+            if missing_tools or d['missing_gpu']: raise Fail('Install the listed build packages first: ' + ', '.join(d['missing_gpu'] or missing_tools))
             st('building', 'Building the graphics-card engine…')
             p = subprocess.Popen(['bash', N + '/scripts/build-gpu.sh', N], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, stdin=subprocess.DEVNULL, start_new_session=True)
             try: out = p.communicate()[0]
@@ -603,14 +571,12 @@ def _deps_install_one(component):
             if p.returncode or not engine_built():
                 print(out[-1500:], file=sys.stderr)
                 raise Fail('Could not build the graphics-card engine. See ~/.cache/gnome-voice-typing/build/ for the build log.')
-        st('done', name + ' installed, including any required dependencies.')
-        return 0
+            st('done', 'Graphics-card engine built.'); return 0
+        raise Fail('Unknown setup component. Reopen Settings and choose a listed item.')
     except Cancelled:
         st('failed', 'Cancelled.'); return 1
-    except Fail as e:
-        st('failed', str(e)); return 1
     except Exception as e:
-        st('failed', friendly(e)); return 1
+        st('failed', str(e) if isinstance(e, (Fail, RuntimeError)) else friendly(e)); return 1
 
 def deps_ack():
     """Persist OK without clearing missing-package reminders or active/failed jobs."""

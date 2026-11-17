@@ -23,8 +23,13 @@ const CLOSE_RED = '#c42b1c', CLOSE_RED_DOWN = '#9d2216', CLOSE_GLOW = 'rgba(232,
 const devOf = (e) => (e && e.device) || (e && e.backend === 'vk' ? 'gpu' : 'cpu');
 const DEV_LABEL = {gpu: 'Graphics card', cpu: 'Processor'};
 const PAGES = [['model', 'Speech model', 'audio-input-microphone-symbolic'], ['mic', 'Microphone & noise', 'audio-volume-high-symbolic'],
-               ['typing', 'Typing & sounds', 'input-keyboard-symbolic'], ['personalize', 'Personalization', 'preferences-desktop-appearance-symbolic'], ['setup', 'Setup & uninstall', 'emblem-system-symbolic']];
+               ['typing', 'Typing & sounds', 'input-keyboard-symbolic'], ['appearance', 'Appearance', 'preferences-desktop-appearance-symbolic'],
+               ['formatting', 'Dictation formatting', 'format-text-bold-symbolic'], ['vocabulary', 'Custom vocabulary', 'accessories-dictionary-symbolic'],
+               ['shortcuts', 'Keyboard shortcuts', 'preferences-desktop-keyboard-shortcuts-symbolic'], ['setup', 'Setup & uninstall', 'emblem-system-symbolic']];
 const shortName = (n) => (n || '').replace(/\s*\(.*?\)/g, '').replace(/-TDT.*$/, '').replace(/ q5$/, '').trim();
+
+const PREFS = {bar_theme: 'dark', bar_size: 'compact', bar_opacity: 97, show_model: true, punctuation: 'model', capitalization: 'model', spoken_punctuation: false, trailing_space: true, vocabulary: []};
+const clone = value => JSON.parse(JSON.stringify(value));
 
 const SEC = 'rgba(255,255,255,0.74)';      // secondary text on the dark panel (~8:1 contrast)
 function wrapLbl(l) { const t = l.clutter_text; t.line_wrap = true; t.line_wrap_mode = Pango.WrapMode.WORD_CHAR; t.ellipsize = Pango.EllipsizeMode.NONE; l.x_expand = true; return l; }
@@ -36,6 +41,8 @@ function lbl(text, size, color, weight) {
 export default class VoiceTypingOverlay extends Extension {
     enable() {
         GLib.mkdir_with_parents(DIR, 0o700);
+        this._settingsSince = Date.now() / 1000; this._settingsRequest = 0;
+        this._editing = false; this._editGrab = null; this._dropOpen = null; this._saveError = ''; this._bindings = null; this._shortcutError = '';
         this._state = 'hidden'; this._last = 0; this._info = {}; this._models = null; this._panelOpen = false;
         this._sel = {model: '', pause: 60, mic: '', sounds: true, follow: true, dev: 'gpu'}; this._base = Object.assign({}, this._sel);
         this._spinners = []; this._spinId = 0; this._geomKey = ''; this._placed = false; this._dragPos = null; this._curKey = null;
@@ -111,6 +118,7 @@ export default class VoiceTypingOverlay extends Extension {
     }
 
     disable() {
+        this._endEditing();
         this._dragEnd(false); this._stopFollow(); this._locTok++;
         if (this._caret) { try { this._caret.setFocusCallback(null); } catch (e) {} try { this._caret.destroy(); } catch (e) {} this._caret = null; }
         if (this._monId) { this._mon.disconnect(this._monId); this._mon.cancel(); this._monId = 0; }
@@ -211,6 +219,7 @@ export default class VoiceTypingOverlay extends Extension {
         this._info = d;
         this._apply(d.state, d.level || 0, d.text || '', !!d.busy);
         this._updateNoiseMeter();
+        if (d.settings_request > this._settingsSince && d.settings_request !== this._settingsRequest && this._models) { this._settingsRequest = d.settings_request; this._openPanel(); }
     }
 
     _readModels() {
@@ -221,6 +230,8 @@ export default class VoiceTypingOverlay extends Extension {
             const first = !this._models;
             this._models = m;
             this._applyAppearance();
+            const requested = this._info?.settings_request;
+            if (requested > this._settingsSince && requested !== this._settingsRequest) { this._settingsRequest = requested; this._openPanel(); }
             if (first || !this._panelOpen) this._syncSel();
             if (this._panelOpen) this._buildPanel();
         } catch (e) {}
@@ -230,6 +241,9 @@ export default class VoiceTypingOverlay extends Extension {
         this._sel = {model: m.current, pause: m.settings.auto_pause_seconds, mic: m.settings.mic || '', sounds: m.settings.sounds !== false, follow: m.settings.follow_field !== false,
                      dev: devOf(this._entries().find(e => e.id === m.current) || (m.models || []).find(e => e.id === m.current) || {device: m.settings.device})};
         this._base = Object.assign({}, this._sel);
+        this._prefDraft = clone(PREFS);
+        for (const key of Object.keys(PREFS)) if (m.settings[key] !== undefined) this._prefDraft[key] = clone(m.settings[key]);
+        this._basePrefs = clone(this._prefDraft);
     }
     _pickDevice(dev) {   // switching device pre-selects the equivalent model there, else the device's recommended default
         const m = this._models; if (!m || this._sel.dev === dev) return;
@@ -288,7 +302,7 @@ export default class VoiceTypingOverlay extends Extension {
                 const [, out] = pr.communicate_utf8_finish(res);
                 const d = JSON.parse(out); const prev = JSON.stringify(this._deps); this._deps = d;
                 const job = d.job && d.job.status;
-                if (['installing', 'building'].includes(job)) this._depsTickStart();
+                if (['installing', 'building', 'downloading', 'verifying'].includes(job)) this._depsTickStart();
                 // Background checks update Settings only when the user has opened it.
                 if (this._panelOpen && prev !== JSON.stringify(d)) this._buildPanel();
             } catch (e) { console.error('voice-typing deps: ' + e); }
@@ -305,7 +319,7 @@ export default class VoiceTypingOverlay extends Extension {
         const s = this._depsJob(), old = this._deps.job;
         if (this._depsPend && GLib.get_monotonic_time() - this._depsPend < 6e6 && (!s || s.t < this._depsStartedAt)) return GLib.SOURCE_CONTINUE; // Ignore the previous component's status while this helper starts.
         this._depsPend = 0;
-        const sig = (j) => j ? j.status + '|' + (j.msg || '') : '';
+        const sig = (j) => j ? j.status + '|' + (j.msg || '') + '|' + j.pct : '';
         if (sig(s) !== sig(old)) { this._deps.job = s; if (this._panelOpen) this._buildPanel(); }
         if (s && ['installing', 'building', 'downloading', 'verifying'].includes(s.status)) return GLib.SOURCE_CONTINUE;
         this._depsTimer = 0;
@@ -349,21 +363,21 @@ export default class VoiceTypingOverlay extends Extension {
         const d = this._deps; if (!d) return null;
         const job = d.job?.status, busy = !!this._depsPend || ['installing', 'building', 'downloading', 'verifying'].includes(job);
         const setupPage = this._page === 'setup';
-        if (!setupPage && !d.needed && !busy && job !== 'failed' && job !== 'done') return null;
+        if (!setupPage && !d.needed && !busy && job !== 'failed') return null;
         const box = new St.BoxLayout({orientation: Clutter.Orientation.VERTICAL, x_expand: true,
             style: 'margin-top: 8px; padding: 9px 11px; spacing: 8px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.15);'});
         const note = (text, color = SEC) => wrapLbl(lbl(text, 9.5, color));
         if (!setupPage) {
-            box.add_child(note(busy ? (d.job?.msg || 'Installing…') : job === 'done' ? d.job.msg : 'Choose optional packages individually in Setup & uninstall.'));
+            box.add_child(note(busy ? (d.job?.msg || 'Installing…') : 'Choose optional packages individually in Setup & uninstall.'));
             box.add_child(this._pill('View packages', 'plain', () => { this._page = 'setup'; this._scrollKeep = 0; this._buildPanel(); }));
             return box;
         }
         box.add_child(lbl('Packages & setup', 11, '#fff', 'bold'));
-        box.add_child(note('Install only the items you want. Required dependencies may be included with a selected package.'));
-        if (d.job) {
-            box.add_child(note(d.job.msg || 'Working…', job === 'done' ? '#7ddc70' : job === 'failed' ? '#ff9a9c' : '#fff'));
-            if (job === 'done' && !busy) box.add_child(this._pill('OK', 'plain', () => this._depsAcknowledge(), !this._depsAckPending));
-        }
+        box.add_child(note('Each supporting package installs separately. Installed packages stay out of this list.'));
+        box.add_child(this._pill('Refresh package list', 'plain', () => this._depsInstall({id: 'catalog', name: 'package list', can_install: true}), !busy));
+        if (d.job && job !== 'done') box.add_child(note(d.job.msg || 'Working…', job === 'failed' ? '#ff9a9c' : '#fff'));
+        if (d.check_error) box.add_child(note(d.check_error, '#ff9a9c'));
+        if (!d.check_error && d.components && !d.components.length) box.add_child(note(d.plan_ready ? 'All listed packages are installed.' : 'Refresh the package list to discover available add-ons and supporting libraries.'));
         if (!d.components) {
             box.add_child(note('Log out and back in after updating Voice typing to load the package list.'));
             return box;
@@ -373,7 +387,7 @@ export default class VoiceTypingOverlay extends Extension {
         const scroll = new St.ScrollView({style: `max-height: ${maxH}px;`, overlay_scrollbars: true,
             hscrollbar_policy: St.PolicyType.NEVER, vscrollbar_policy: St.PolicyType.AUTOMATIC, x_expand: true});
         const list = new St.BoxLayout({orientation: Clutter.Orientation.VERTICAL, x_expand: true, style: 'spacing: 12px;'});
-        for (const item of d.components) {
+        for (const item of d.components.filter(item => !item.installed)) {
             const row = new St.BoxLayout({x_expand: true, style: 'spacing: 10px;'});
             const text = new St.BoxLayout({orientation: Clutter.Orientation.VERTICAL, x_expand: true, style: 'spacing: 3px;'});
             text.add_child(wrapLbl(lbl(item.name, 10.5, '#fff', 'bold')));
@@ -388,6 +402,13 @@ export default class VoiceTypingOverlay extends Extension {
                 button.y_align = Clutter.ActorAlign.START; row.add_child(button);
             }
             list.add_child(row);
+            if (busy && d.job?.component === item.id && ['python', 'system', 'bootstrap'].includes(item.kind)) {
+                const pct = Number.isFinite(d.job.pct) ? Math.max(0, Math.min(100, d.job.pct)) : null;
+                const track = new St.BoxLayout({width: 340, height: 6, style: 'border-radius: 3px; background-color: rgba(255,255,255,0.15);'});
+                track.add_child(new St.Widget({width: pct === null ? 0 : Math.round(340 * pct / 100), height: 6, style: `border-radius: 3px; background-color: ${ACCENT};`}));
+                list.add_child(track);
+                list.add_child(note(pct === null ? 'Downloading…' : `${pct}%${pct === 100 ? ' · Installing' : ' downloaded'}`));
+            }
             if (!item.installed && !item.can_install && item.manual) {
                 const manual = note('Run in a terminal: ' + item.manual); manual.clutter_text.selectable = true; list.add_child(manual);
             }
@@ -458,7 +479,7 @@ export default class VoiceTypingOverlay extends Extension {
             if (this._bar) { this._catSig = ''; this._refreshCat(); }
         });
     }
-    _dirty() { const a = this._sel, b = this._base; return a.model !== b.model || a.pause !== b.pause || a.mic !== b.mic || a.sounds !== b.sounds || a.follow !== b.follow; }
+    _dirty() { const a = this._sel, b = this._base; return a.model !== b.model || a.pause !== b.pause || a.mic !== b.mic || a.sounds !== b.sounds || a.follow !== b.follow || JSON.stringify(this._prefDraft) !== JSON.stringify(this._basePrefs); }
 
     // ---------- position (drag) ----------
     // The dragged position lives only in this._dragPos for the current open session (cleared by _hide); nothing is saved or reloaded.
@@ -656,7 +677,7 @@ export default class VoiceTypingOverlay extends Extension {
         if (this._focusSig) { global.display.disconnect(this._focusSig); this._focusSig = 0; }
     }
     _follow() {
-        if (!this._bar || this._state === 'hidden' || !this._placed || this._locating || this._following || this._dragging) return;
+        if (!this._bar || this._state === 'hidden' || !this._placed || this._locating || this._following || this._dragging || this._editing) return;
         this._following = true;
         this._locate(0.25, (f) => {
             this._following = false;
@@ -840,14 +861,16 @@ export default class VoiceTypingOverlay extends Extension {
     }
     _togglePanel() { this._panelOpen ? this._closePanel() : this._openPanel(); }
     _openPanel() {
-        if (!this._models) return;
+        if (!this._models || this._panelOpen) return;
         this._syncSel(); this._saveState = 'idle'; this._readyUntil = 0;
         if (this._saveTimer) { GLib.source_remove(this._saveTimer); this._saveTimer = 0; }
+        this._dropOpen = null; this._saveError = '';
         this._confirm = ''; this._note = {}; this._scrollKeep = 0; this._page = this._page === 'setup' ? 'setup' : null; this._unConfirm = false; this._panelOpen = true; this._buildPanel(); this._refreshCat(); this._refreshDeps();
         this._panel.visible = true; this._panel.reactive = true; this._placePanel(); this._geomSoon();
         this._panel.remove_all_transitions(); this._panel.ease({opacity: 255, duration: 120, mode: Clutter.AnimationMode.EASE_OUT_QUAD});
     }
     _closePanel() {
+        this._endEditing(); this._dropOpen = null;
         if (!this._panel || !this._panelOpen) return;
         this._panelOpen = false; this._panel.reactive = false; this._panel.remove_all_transitions();
         // closing resets the Save button: on reopen it starts dimmed and wakes up on the first change
@@ -915,7 +938,7 @@ export default class VoiceTypingOverlay extends Extension {
             box.add_child(note('Checking the files already on disk…'));
         } else if (st === 'setup') {
             box.add_child(note(e.setup === 'engine' ? 'The files are here; the graphics-card engine still has to be built.' : 'The files are here; the faster-whisper add-on still has to be installed.'));
-            const l = line(); l.add_child(this._pill('Set up', 'primary', () => this._doDownload(e.id))); box.add_child(l);
+            const l = line(); l.add_child(this._pill('Set up', 'primary', () => { this._page = 'setup'; this._buildPanel(); this._refreshDeps(); })); box.add_child(l);
         } else {   // missing
             const l = line(); l.add_child(this._pill('Download · ' + (e.size_h || this._mb(e.size || 0)), 'primary', () => this._doDownload(e.id)));
             box.add_child(l);
@@ -940,6 +963,7 @@ export default class VoiceTypingOverlay extends Extension {
     }
 
     _buildPanel() {
+        if (this._editing) return;
         const m = this._models; if (!m || !this._panel) return;
         const P = this._panel; this._rememberScroll(); P.destroy_all_children(); this._spinners = [this._barSpin]; this._dlW = {};
         this._rowActors = {}; this._chipActors = {}; this._devActors = {}; this._micRow = this._soundRow = this._followRow = this._listScroll = this._nzFill = null; this._catActors = {};
@@ -957,7 +981,7 @@ export default class VoiceTypingOverlay extends Extension {
 
         // header: title + close (red glow on hover)
         const head = new St.BoxLayout({style: 'spacing: 8px;'});
-        if (pg) { this._panelBack = this._iconButton('go-previous-symbolic', 16, false, () => { this._page = null; this._scrollKeep = 0; this._buildPanel(); }); head.add_child(this._panelBack); }
+        if (pg) { this._panelBack = this._iconButton('go-previous-symbolic', 16, false, () => { this._endEditing(); this._dropOpen = null; this._page = null; this._scrollKeep = 0; this._buildPanel(); }); head.add_child(this._panelBack); }
         else this._panelBack = null;
         const title = lbl(pg ? PAGES.find(x => x[0] === pg)[1] : 'Voice typing settings', 13, '#fff', 'bold'); title.x_expand = true; title.y_align = Clutter.ActorAlign.CENTER;
         head.add_child(title);
@@ -1036,17 +1060,11 @@ export default class VoiceTypingOverlay extends Extension {
 
         if (pg === 'mic') {
         P.add_child(sect('Microphone', true));
-        const mics = m.settings.mics || [];
-        const cur = mics.find(x => x.id === this._sel.mic) || mics[0] || {name: 'System default', id: ''};
-        const micRow = new St.BoxLayout({x_expand: true});
-        const mname = lbl(cur.name, 10.5, '#fff'); mname.x_expand = true; mname.clutter_text.ellipsize = Pango.EllipsizeMode.END;
-        micRow.add_child(mname);
-        micRow.add_child(new St.Icon({icon_name: 'pan-down-symbolic', icon_size: 14, style: 'color: rgba(255,255,255,0.85);'}));
-        this._interactive(micRow, (a, s) => {
-            a.style = 'padding: 8px 10px; border-radius: 6px; spacing: 8px; border: 1px solid rgba(255,255,255,0.07); background-color: ' +
-                      (s.down ? 'rgba(255,255,255,0.04)' : s.hover ? 'rgba(255,255,255,0.10)' : 'rgba(255,255,255,0.06)') + ';';
-        }, () => { const k = mics.findIndex(x => x.id === cur.id); this._sel.mic = mics[(k + 1) % mics.length].id; this._buildPanel(); });
-        dim(micRow); P.add_child(micRow); this._micRow = micRow;
+        const mics = [...(m.settings.mics || [])];
+        if (!mics.some(mic => mic.id === '')) mics.unshift({id: '', name: 'System default'});
+        if (!mics.some(mic => mic.id === this._sel.mic)) mics.push({id: this._sel.mic, name: 'Disconnected microphone (choose another)'});
+        P.add_child(this._dropdown('microphone', mics.map(mic => [mic.id, mic.name]), this._sel.mic,
+            value => { this._sel.mic = value; }, loading));
         P.add_child(this._noiseSectionSafe(sect, dim));
         }
 
@@ -1089,10 +1107,10 @@ export default class VoiceTypingOverlay extends Extension {
         }
         }
 
-        if (pg === 'personalize') {
-            P.add_child(wrapLbl(lbl('Choose the bar’s appearance, format your dictation, add preferred words, and change your shortcuts.', 10.5, SEC)));
-            P.add_child(this._pill('Open Personalization', 'primary', () => { this._cli(['preferences']); this._closePanel(); }));
-        }
+        if (pg === 'appearance') this._appearanceSettings(P, sect);
+        if (pg === 'formatting') this._formattingSettings(P, sect);
+        if (pg === 'vocabulary') this._vocabularySettings(P);
+        if (pg === 'shortcuts') this._shortcutSettings(P);
         if (pg === 'setup') P.add_child(this._setupInfo(m, !!depsCard));
         if ((!pg || pg === 'setup') && m.last_error) {
             const e = m.last_error;
@@ -1115,6 +1133,143 @@ export default class VoiceTypingOverlay extends Extension {
         if (this._panel.visible) { this._placePanel(); this._geomSoon(); }
     }
 
+    _settingsScroll(child, reserved = 230) {
+        const mon = Main.layoutManager.primaryMonitor;
+        const scroll = new St.ScrollView({style: `max-height: ${Math.max(160, Math.min(430, (mon?.height || 720) - reserved))}px;`,
+            overlay_scrollbars: true, hscrollbar_policy: St.PolicyType.NEVER, vscrollbar_policy: St.PolicyType.AUTOMATIC, x_expand: true});
+        scroll.add_child(child); this._listScroll = scroll; this._restoreScroll(); return scroll;
+    }
+    _dropdown(id, options, selected, changed, disabled = false) {
+        const box = new St.BoxLayout({orientation: Clutter.Orientation.VERTICAL, x_expand: true, style: 'spacing: 4px;'});
+        const current = options.find(([value]) => value === selected);
+        const button = this._pill((current?.[1] || 'Select…') + (this._dropOpen === id ? ' ▴' : ' ▾'), 'plain', () => {
+            this._dropOpen = this._dropOpen === id ? null : id; this._buildPanel();
+        }, !disabled);
+        box.add_child(button);
+        if (this._dropOpen === id) {
+            const list = new St.BoxLayout({orientation: Clutter.Orientation.VERTICAL, x_expand: true,
+                style: 'padding: 5px; spacing: 3px; background-color: rgba(0,0,0,0.30); border-radius: 6px;'});
+            for (const [value, title] of options) list.add_child(this._pill((selected === value ? '✓ ' : '') + title, selected === value ? 'primary' : 'plain', () => {
+                changed(value); this._dropOpen = null; this._saveError = ''; this._buildPanel();
+            }));
+            const scroll = new St.ScrollView({style: 'max-height: 160px;', hscrollbar_policy: St.PolicyType.NEVER, vscrollbar_policy: St.PolicyType.AUTOMATIC, x_expand: true});
+            scroll.add_child(list); box.add_child(scroll);
+        }
+        return box;
+    }
+    _prefChoice(P, sect, key, title, options) {
+        P.add_child(sect(title, true));
+        P.add_child(this._dropdown(key, options, this._prefDraft[key], value => { this._prefDraft[key] = value; }));
+    }
+    _prefToggle(P, key, title) {
+        const on = this._prefDraft[key];
+        P.add_child(this._pill(`${on ? '✓' : '○'} ${title}`, on ? 'primary' : 'plain', () => {
+            this._prefDraft[key] = !on; this._saveError = ''; this._buildPanel();
+        }));
+    }
+    _appearanceSettings(P, sect) {
+        this._prefChoice(P, sect, 'bar_theme', 'Theme', [['dark', 'Dark'], ['light', 'Light'], ['contrast', 'High contrast']]);
+        this._prefChoice(P, sect, 'bar_size', 'Size', [['compact', 'Compact'], ['comfortable', 'Comfortable'], ['large', 'Large']]);
+        this._prefChoice(P, sect, 'bar_opacity', 'Background opacity', Array.from({length: 31}, (_, i) => [70 + i, `${70 + i}%`]));
+        this._prefToggle(P, 'show_model', 'Show model name');
+    }
+    _formattingSettings(P, sect) {
+        this._prefChoice(P, sect, 'punctuation', 'Automatic punctuation', [['model', 'Keep model punctuation'], ['none', 'Remove punctuation']]);
+        this._prefChoice(P, sect, 'capitalization', 'Capitalization', [['model', 'Keep model capitalization'], ['sentence', 'Capitalize sentence starts'], ['lower', 'Lowercase']]);
+        this._prefToggle(P, 'spoken_punctuation', 'Convert spoken punctuation');
+        this._prefToggle(P, 'trailing_space', 'Add a space after each phrase');
+        P.add_child(wrapLbl(lbl('Say “comma”, “period”, “question mark”, “exclamation mark”, “colon” or “semicolon”. Custom formatting waits until the phrase ends.', 9.5, SEC)));
+    }
+    _beginEditing(actor) {
+        if (!this._editGrab) {
+            this._cli(['pause']);
+            try { this._editGrab = Main.pushModal(this._panel, {actionMode: Shell.ActionMode.POPUP}); }
+            catch (e) { this._saveError = 'Could not focus the editor. Close Settings and try again.'; return; }
+        }
+        this._editing = true; this._panel.can_focus = true;
+        actor.grab_key_focus();
+    }
+    _endEditing() {
+        this._editing = false;
+        if (this._panel) this._panel.can_focus = false;
+        if (this._shortcutCapture) { this._panel.disconnect(this._shortcutCapture); this._shortcutCapture = 0; }
+        if (this._editGrab) { try { Main.popModal(this._editGrab); } catch (e) {} this._editGrab = null; }
+    }
+    _vocabularySettings(P) {
+        P.add_child(wrapLbl(lbl('Heard phrase → preferred text. Matches whole words, ignoring case. Your preferred spelling is kept. Dictation pauses while you type here.', 9.5, SEC)));
+        const list = new St.BoxLayout({orientation: Clutter.Orientation.VERTICAL, x_expand: true, style: 'spacing: 8px;'});
+        this._prefDraft.vocabulary.forEach((rule, index) => {
+            const row = new St.BoxLayout({style: 'spacing: 5px;', x_expand: true});
+            for (const [key, hint] of [['heard', 'Heard phrase'], ['write', 'Write instead']]) {
+                const entry = new St.Entry({text: rule[key], hint_text: hint, can_focus: true, x_expand: true, style: 'width: 150px; padding: 7px; color: #fff; background-color: #222; border: 1px solid #666; border-radius: 5px;'});
+                entry.clutter_text.max_length = 200;
+                entry.clutter_text.connect('key-focus-in', () => { if (!this._editing) this._beginEditing(entry.clutter_text); });
+                entry.clutter_text.connect('text-changed', () => { rule[key] = entry.get_text(); this._saveError = ''; this._refreshSave(); });
+                entry.clutter_text.connect('key-press-event', (actor, event) => {
+                    if (event.get_key_symbol() !== Clutter.KEY_Escape) return Clutter.EVENT_PROPAGATE;
+                    this._endEditing(); this._buildPanel(); return Clutter.EVENT_STOP;
+                });
+                row.add_child(entry);
+            }
+            row.add_child(this._iconButton('edit-delete-symbolic', 14, true, () => { this._endEditing(); this._prefDraft.vocabulary.splice(index, 1); this._buildPanel(); }));
+            list.add_child(row);
+        });
+        P.add_child(this._settingsScroll(list, 350));
+        P.add_child(this._pill('Add word or phrase', 'plain', () => { this._endEditing(); this._prefDraft.vocabulary.push({heard: '', write: ''}); this._buildPanel(); }, this._prefDraft.vocabulary.length < 200));
+        P.add_child(this._pill('Done editing', 'plain', () => { this._endEditing(); this._buildPanel(); }));
+    }
+    _shortcutRequest(bindings = null) {
+        const cli = this._models?.cli; if (!cli || this._shortcutPending) return;
+        this._shortcutPending = true;
+        const args = ['/usr/bin/python3', GLib.path_get_dirname(cli) + '/shortcuts.py'];
+        if (bindings) args.push(JSON.stringify(bindings));
+        let process;
+        try { process = Gio.Subprocess.new(args, Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE); }
+        catch (e) { this._shortcutPending = false; this._shortcutError = 'Could not open shortcut settings.'; return; }
+        process.communicate_utf8_async(null, null, (p, result) => {
+            this._shortcutPending = false;
+            try {
+                const [, out] = p.communicate_utf8_finish(result); const reply = JSON.parse(out);
+                if (reply.error || !p.get_successful()) throw new Error(reply.error || 'Shortcut settings could not be saved.');
+                this._bindings = reply.bindings; this._shortcutError = bindings ? 'Shortcuts saved.' : '';
+            } catch (e) { this._shortcutError = e.message; }
+            if (this._bar && this._panelOpen && this._page === 'shortcuts') this._buildPanel();
+        });
+    }
+    _shortcutSettings(P) {
+        P.add_child(wrapLbl(lbl('Click a shortcut and press a combination with Control, Alt or Super. Escape cancels. Conflicting shortcuts will not be changed.', 9.5, SEC)));
+        if (!this._bindings) {
+            P.add_child(lbl(this._shortcutError || 'Loading shortcuts…', 10, SEC));
+            if (!this._shortcutPending && !this._shortcutError) this._shortcutRequest();
+            return;
+        }
+        for (const [action, title] of [['toggle', 'Start / pause dictation'], ['close', 'Close dictation']]) {
+            P.add_child(lbl(title, 10.5, '#fff', 'bold'));
+            const row = new St.BoxLayout({style: 'spacing: 8px;'});
+            const display = (this._bindings[action] || 'Disabled').replace(/></g, '+').replace(/[<>]/g, '');
+            const button = this._pill(display, 'plain', () => {
+                this._beginEditing(this._panel);
+                if (!this._editing) return;
+                button.get_child().text = 'Press shortcut…';
+                this._shortcutCapture = this._panel.connect('key-press-event', (actor, event) => {
+                    const key = event.get_key_symbol(), mods = event.get_state();
+                    if (key === Clutter.KEY_Escape) { this._endEditing(); this._buildPanel(); return Clutter.EVENT_STOP; }
+                    const control = !!(mods & Clutter.ModifierType.CONTROL_MASK), alt = !!(mods & Clutter.ModifierType.MOD1_MASK), superKey = !!(mods & Clutter.ModifierType.SUPER_MASK);
+                    if (!control && !alt && !superKey) return Clutter.EVENT_STOP;
+                    if ([Clutter.KEY_Control_L, Clutter.KEY_Control_R, Clutter.KEY_Alt_L, Clutter.KEY_Alt_R, Clutter.KEY_Shift_L, Clutter.KEY_Shift_R, Clutter.KEY_Super_L, Clutter.KEY_Super_R].includes(key)) return Clutter.EVENT_STOP;
+                    const mask = mods & (Clutter.ModifierType.CONTROL_MASK | Clutter.ModifierType.MOD1_MASK | Clutter.ModifierType.SUPER_MASK | Clutter.ModifierType.SHIFT_MASK);
+                    const value = Meta.accelerator_name(mask, key);
+                    this._bindings[action] = value; this._shortcutError = ''; this._endEditing(); this._buildPanel(); return Clutter.EVENT_STOP;
+                });
+            }, !this._shortcutPending);
+            row.add_child(button);
+            row.add_child(this._pill('Disable', 'plain', () => { this._bindings[action] = ''; this._shortcutError = ''; this._buildPanel(); }, !this._shortcutPending));
+            P.add_child(row);
+        }
+        P.add_child(this._pill('Save shortcuts', 'primary', () => this._shortcutRequest(this._bindings), !this._shortcutPending));
+        if (this._shortcutError) P.add_child(wrapLbl(lbl(this._shortcutError, 9.5, SEC)));
+    }
+
     // ---------- settings home: one clickable tile per category ----------
     _homePage(m) {
         const box = new St.BoxLayout({orientation: Clutter.Orientation.VERTICAL, x_expand: true, style: 'spacing: 6px; padding-top: 10px;'});
@@ -1127,7 +1282,10 @@ export default class VoiceTypingOverlay extends Extension {
                 model: (cur ? cur.name : 'No model picked') + '  ·  ' + DEV_LABEL[this._sel.dev],
                 mic: (mic ? mic.name : 'System default') + '  ·  noise suppression ' + (s.noise_suppression !== false ? 'on' : 'off'),
                 typing: 'Pause after ' + (pause === 'Never' ? 'never' : pause) + '  ·  sounds ' + (this._sel.sounds ? 'on' : 'off') + '  ·  follow ' + (this._sel.follow ? 'on' : 'off'),
-                personalize: 'Appearance · formatting · vocabulary · shortcuts',
+                appearance: 'Theme · size · opacity · model label',
+                formatting: 'Punctuation · capitalization · spacing',
+                vocabulary: 'Preferred words and spellings',
+                shortcuts: 'Start/pause and close dictation',
                 setup: miss ? `${miss} optional package${miss === 1 ? '' : 's'} missing  ·  uninstall` : 'Optional packages  ·  uninstall',
             };
             for (const [id, name, icon] of PAGES) {
@@ -1141,11 +1299,11 @@ export default class VoiceTypingOverlay extends Extension {
                 this._interactive(row, (a, st) => {
                     a.style = 'spacing: 12px; padding: 10px 12px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.07); background-color: ' +
                               (st.down ? 'rgba(255,255,255,0.04)' : st.hover ? 'rgba(255,255,255,0.11)' : 'rgba(255,255,255,0.06)') + ';';
-                }, () => { this._page = id; this._scrollKeep = 0; this._unConfirm = false; this._buildPanel(); });
+                }, () => { if (id === 'shortcuts') { this._bindings = null; this._shortcutError = ''; } this._dropOpen = null; this._page = id; this._scrollKeep = 0; this._unConfirm = false; this._buildPanel(); });
                 box.add_child(row); this._catActors[id] = row;
             }
         } catch (e) { console.error('voice-typing settings home: ' + e); }
-        return box;
+        return this._settingsScroll(box, 260);
     }
     _setupInfo(m, hasCard) {
         const box = new St.BoxLayout({orientation: Clutter.Orientation.VERTICAL, x_expand: true, style: 'spacing: 4px; padding-top: 10px;'});
@@ -1338,7 +1496,9 @@ export default class VoiceTypingOverlay extends Extension {
         this._wasLoading = loading;
         this._panelSpin.visible = loading;
         const sty = (c, sz, b) => `${FONT} font-size: ${sz}pt; color: ${c};${b ? ' font-weight: bold;' : ''}`;
-        if (loading) { this._statusLabel.text = `Loading ${i.loading || sw.target}…`; this._statusLabel.style = sty(ACCENT, 10); }
+        if (this._saveError) { this._statusLabel.text = this._saveError; this._statusLabel.style = sty('#ff8a8d', 10); }
+        else if (this._saveState === 'saving') { this._statusLabel.text = 'Saving…'; this._statusLabel.style = sty(SEC, 10); }
+        else if (loading) { this._statusLabel.text = `Loading ${i.loading || sw.target}…`; this._statusLabel.style = sty(ACCENT, 10); }
         else if (sw.status === 'error') { this._statusLabel.text = sw.msg; this._statusLabel.style = sty('#ff8a8d', 10); }
         else if (sw.status === 'ready' && GLib.get_monotonic_time() < this._readyUntil) { this._statusLabel.text = '✓ Ready'; this._statusLabel.style = sty('#7ddc70', 10.5, true); }
         else { this._statusLabel.text = ''; }
@@ -1347,22 +1507,33 @@ export default class VoiceTypingOverlay extends Extension {
 
     _save() {
         if (this._isLoading() || this._saveState !== 'idle' || !this._dirty()) return;
+        this._endEditing();
         const m = this._models, payload = {};
-        if (this._sel.model !== m.current) { payload.model = this._sel.model; payload.device = devOf(this._entries().find(x => x.id === this._sel.model)); }
+        if (this._sel.model !== m.current) { payload.model = this._sel.model; payload.device = devOf(this._entries().find(x => x.id === payload.model)); }
         if (this._sel.pause !== m.settings.auto_pause_seconds) payload.auto_pause_seconds = this._sel.pause;
         if (this._sel.mic !== (m.settings.mic || '')) payload.mic = this._sel.mic;
         if (this._sel.sounds !== (m.settings.sounds !== false)) payload.sounds = this._sel.sounds;
         if (this._sel.follow !== (m.settings.follow_field !== false)) payload.follow_field = this._sel.follow;
-        this._base = Object.assign({}, this._sel);          // what is saved now; any further change re-activates Save
-        this._saveState = 'saved';
-        if (this._saveTimer) GLib.source_remove(this._saveTimer);
-        this._saveTimer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1400, () => { this._saveTimer = 0; this._saveState = 'idle'; this._refreshSave(); return GLib.SOURCE_REMOVE; });
-        if (payload.model) {   // optimistic: show spinner at once; daemon confirms via models.json/state.json
-            const e = this._entries().find(x => x.id === payload.model);
-            this._info = Object.assign({}, this._info, {loading: e ? e.name : payload.model});
-            m.switch = {status: 'loading', target: payload.model, msg: ''};
-            this._buildPanel(); this._apply(this._state, 0, '', false);
-        } else this._refreshSave();
-        if (Object.keys(payload).length) this._cli(['--apply', JSON.stringify(payload)]);
+        const submittedDraft = clone(this._prefDraft), sentPrefs = clone(this._prefDraft), sentSel = clone(this._sel);
+        sentPrefs.vocabulary = sentPrefs.vocabulary.map(rule => ({heard: rule.heard.trim(), write: rule.write.trim()})).filter(rule => rule.heard || rule.write);
+        for (const key of Object.keys(PREFS)) if (JSON.stringify(sentPrefs[key]) !== JSON.stringify(this._basePrefs[key])) payload[key] = sentPrefs[key];
+        this._saveError = ''; this._saveState = 'saving'; this._buildPanel();
+        let process;
+        try { process = Gio.Subprocess.new([m.cli, '--apply', JSON.stringify(payload)], Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE); }
+        catch (e) { this._saveState = 'idle'; this._saveError = 'Could not contact the background service.'; this._buildPanel(); return; }
+        process.communicate_utf8_async(null, null, (p, result) => {
+            if (!this._bar) return;
+            try {
+                const [, out] = p.communicate_utf8_finish(result); const reply = JSON.parse(out);
+                if (!p.get_successful() || !reply.ok) throw new Error(reply.error || 'The service did not confirm your settings.');
+                if (!reply.preferences && Object.keys(payload).some(key => key in PREFS)) throw new Error('Log out and back in to load the updated service before saving these settings.');
+                if (reply.preferences && Object.keys(payload).some(key => key in PREFS && JSON.stringify(reply.preferences[key]) !== JSON.stringify(sentPrefs[key]))) throw new Error('Settings were not confirmed. Please try again.');
+                if (JSON.stringify(this._prefDraft) === JSON.stringify(submittedDraft)) this._prefDraft = clone(sentPrefs);
+                this._base = sentSel; this._basePrefs = sentPrefs; this._saveState = 'saved';
+                if (this._saveTimer) GLib.source_remove(this._saveTimer);
+                this._saveTimer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1400, () => { this._saveTimer = 0; this._saveState = 'idle'; if (this._panelOpen) this._updatePanelStatus(); return GLib.SOURCE_REMOVE; });
+            } catch (e) { this._saveState = 'idle'; this._saveError = e.message; }
+            if (this._panelOpen) this._buildPanel();
+        });
     }
 }

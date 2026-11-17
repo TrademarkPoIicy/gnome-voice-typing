@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.11
+
+- Move appearance, formatting, vocabulary and shortcuts into the existing cog panel; remove the separate Personalization window.
+- Replace microphone cycling with a dropdown containing all available microphones.
+- Resolve and list supporting packages individually, download one artifact per click with percentage progress, and prevent automatic dependency installs.
+- Hide installed packages based on persistent package metadata, including after reopening Settings or restarting; stop replaying completed setup messages.
+- Keep optional add-ons and GPU builds out of model-download and main-install side effects.
+- Confirm settings saves through the service and show validation errors in the panel.
+
 ## 0.1.10
 
 - List setup packages individually, with a description, installed status and per-item Install button; remove the install-all action.

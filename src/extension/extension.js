@@ -175,9 +175,14 @@ export default class VoiceTypingOverlay extends Extension {
     _barStyle(hot) {
         const a = this._appearance(), light = a.theme === 'light', contrast = a.theme === 'contrast';
         const rgb = THEMES[a.theme];
-        const border = contrast ? '#fff' : light ? 'rgba(0,0,0,0.25)' : hot ? 'rgba(255,255,255,0.16)' : 'rgba(255,255,255,0.08)';
-        return `background-color: rgba(${rgb},${a.opacity}); border: 1px solid ${border}; border-radius: 22px; ` +
-               'padding: 4px 5px 4px 9px; spacing: 4px; box-shadow: 0 4px 14px rgba(0,0,0,0.50), 0 1px 3px rgba(0,0,0,0.35);';
+        // A fixed dark shadow shows through a translucent fill and looks like the
+        // default dark theme. Fade every part of the backdrop together.
+        const alpha = value => (value * a.opacity).toFixed(4);
+        const borderRgb = light ? '0,0,0' : '255,255,255';
+        const border = `rgba(${borderRgb},${alpha(contrast ? 1 : light ? 0.25 : hot ? 0.16 : 0.08)})`;
+        const shadow = a.opacity === 0 ? 'none' : `0 4px 14px rgba(0,0,0,${alpha(0.5)})`;
+        return `background-color: rgba(${rgb},${a.opacity.toFixed(4)}); border: 1px solid ${border}; border-radius: 22px; ` +
+               `padding: 4px 5px 4px 9px; spacing: 4px; box-shadow: ${shadow};`;
     }
     _applyAppearance() {
         if (!this._bar || !this._label) return;

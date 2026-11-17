@@ -12,6 +12,7 @@ BUILD="${GVT_BUILD_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/gnome-voice-typing/build
 JOBS="${GVT_JOBS:-$(nproc 2>/dev/null || echo 4)}"
 for c in git cmake c++ glslc; do command -v "$c" >/dev/null || { echo "build-gpu: missing '$c'" >&2; exit 2; }; done
 GPUSRC="$SRC/src/gpu"; [ -f "$GPUSRC/shim.cpp" ] || GPUSRC="$SRC/gpu"        # source tree vs. installed copy
+echo "GVT_PROGRESS:0:Fetching engine source…"
 mkdir -p "$BUILD/whisper.cpp" "$DATA/gpu/lib"
 cd "$BUILD/whisper.cpp"
 if [ "$(git rev-parse HEAD 2>/dev/null || true)" != "$WHISPER_COMMIT" ]; then
@@ -21,14 +22,18 @@ if [ "$(git rev-parse HEAD 2>/dev/null || true)" != "$WHISPER_COMMIT" ]; then
 fi
 [ "$(git rev-parse HEAD)" = "$WHISPER_COMMIT" ] || { echo "build-gpu: unexpected source commit" >&2; exit 3; }
 GEN=(); command -v ninja >/dev/null && GEN=(-G Ninja)
+echo "GVT_PROGRESS:10:Configuring engine…"
 cmake -S . -B build "${GEN[@]}" -DCMAKE_BUILD_TYPE=Release -DGGML_VULKAN=ON -DGGML_NATIVE=ON -DBUILD_SHARED_LIBS=ON \
   -DWHISPER_BUILD_EXAMPLES=OFF -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_SERVER=OFF \
   -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON '-DCMAKE_INSTALL_RPATH=$ORIGIN' >"$BUILD/cmake.log" 2>&1 || { tail -30 "$BUILD/cmake.log" >&2; exit 4; }
+echo "GVT_PROGRESS:20:Compiling engine (this stage can take several minutes)…"
 cmake --build build -j "$JOBS" --config Release >"$BUILD/build.log" 2>&1 || { tail -40 "$BUILD/build.log" >&2; exit 5; }
+echo "GVT_PROGRESS:90:Installing engine libraries…"
 rm -f "$DATA"/gpu/lib/lib*.so*
 find build -name 'lib*.so*' \( -name 'libwhisper*' -o -name 'libparakeet*' -o -name 'libggml*' \) -exec cp -a {} "$DATA/gpu/lib/" \;
 c++ -O2 -shared -fPIC -std=c++17 -I include -I ggml/include "$GPUSRC/shim.cpp" -o "$DATA/gpu/libasrshim.so" \
   -L "$DATA/gpu/lib" -lwhisper -lparakeet -lggml -lggml-base '-Wl,-rpath,$ORIGIN/lib' >"$BUILD/shim.log" 2>&1 || { cat "$BUILD/shim.log" >&2; exit 6; }
 [ "$GPUSRC/backend.py" -ef "$DATA/gpu/backend.py" ] || cp "$GPUSRC/backend.py" "$DATA/gpu/backend.py"
 cp LICENSE "$DATA/gpu/LICENSE.whisper.cpp" 2>/dev/null || true
+echo "GVT_PROGRESS:100:Engine built"
 echo "build-gpu: OK ($(ls "$DATA/gpu/lib" | wc -l) libraries in $DATA/gpu/lib)"

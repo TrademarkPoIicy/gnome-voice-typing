@@ -210,3 +210,20 @@ Full details and links: [`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md). Th
   `GVT_DRY_RUN=1` makes the daemon log what it would type instead of typing (developer option).
 - Layout: `src/bin` (daemon, CLI, model manager), `src/extension` (GNOME Shell extension), `src/gpu` (Vulkan backend + C shim),
   `src/data` (model catalog and checksummed registry), `src/lib` (GNOME settings helper), `src/system` (udev rule).
+
+### Appearance and individual packages (0.1.12)
+
+The cog’s Appearance page offers separate bubble and Settings themes: Dark, Light,
+High contrast, Ocean, Forest, Plum, Midnight and Warm. Tiny reduces the bubble to
+half the Compact width, retaining microphone, Settings and Close controls. Type a
+background opacity from 0 to 100 percent. Following clicked text fields defaults
+to off; an explicitly saved preference is preserved.
+
+In Setup & uninstall, install **pip** first if offered, then **Refresh package
+list** to discover individual packages and their supporting libraries. Downloads
+can run concurrently with independent progress bars. Writes to the Python
+environment or system package database are serialized. System packages may still
+require their listed dependencies to be installed first. No button installs the
+whole list. Installed packages disappear based on installed package metadata.
+The graphics engine shows approximate build-stage percentages, rather than a
+byte-download percentage. Settings stays open during background state changes.

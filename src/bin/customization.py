@@ -7,12 +7,13 @@ import re
 import tempfile
 
 DEFAULTS = {
-    'bar_theme': 'dark', 'bar_size': 'compact', 'bar_opacity': 97,
+    'bar_theme': 'dark', 'settings_theme': 'dark', 'bar_size': 'compact', 'bar_opacity': 97,
     'show_model': True, 'punctuation': 'model', 'capitalization': 'model',
     'spoken_punctuation': False, 'trailing_space': True, 'vocabulary': [],
 }
-CHOICES = {'bar_theme': ('dark', 'light', 'contrast'),
-           'bar_size': ('compact', 'comfortable', 'large'),
+THEMES = ('dark', 'light', 'contrast', 'ocean', 'forest', 'plum', 'midnight', 'warm')
+CHOICES = {'bar_theme': THEMES, 'settings_theme': THEMES,
+           'bar_size': ('tiny', 'compact', 'comfortable', 'large'),
            'punctuation': ('model', 'none'),
            'capitalization': ('model', 'sentence', 'lower')}
 
@@ -26,8 +27,8 @@ def validate(values):
             if value not in CHOICES[key]:
                 raise ValueError('Choose a valid value for ' + key.replace('_', ' ') + '.')
         elif key == 'bar_opacity':
-            if type(value) is not int or not 70 <= value <= 100:
-                raise ValueError('Bar opacity must be between 70 and 100 percent.')
+            if type(value) is not int or not 0 <= value <= 100:
+                raise ValueError('Bar opacity must be between 0 and 100 percent.')
         elif key == 'vocabulary':
             if not isinstance(value, list) or len(value) > 200:
                 raise ValueError('Use up to 200 vocabulary rules.')

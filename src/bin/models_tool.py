@@ -21,6 +21,7 @@ A model counts as installed only when EVERY file listed in the registry exists w
 (*.part, resumable) and moved into place only when complete, so a half-downloaded model never sits in the models folder.
 """
 import shlex
+import re
 import fcntl
 import package_plan
 import hashlib, importlib.util, json, os, shutil, signal, socket, subprocess, sys, tarfile, time, urllib.request, urllib.error
@@ -119,8 +120,9 @@ def read_status(mid):
     try: s = json.load(open(_sfile(mid)))
     except Exception: return None
     if s.get('status') in ACTIVE and not _pid_is_ours(s.get('pid', 0)):
-        s = {'id': mid, 'status': 'failed', 'msg': 'The download was interrupted. Press Retry to continue where it stopped.', 'pid': 0, 't': time.time()}
-        try: write_status(mid, status='failed', msg=s['msg'])
+        component = s.get('component')
+        s = {'id': mid, 'component': component, 'status': 'failed', 'msg': 'The installation was interrupted. Press Retry to continue.', 'pid': 0, 't': time.time()}
+        try: write_status(mid, status='failed', msg=s['msg'], component=component)
         except OSError: pass
     return s
 
@@ -464,6 +466,11 @@ def deps_status():
             'pkexec': bool(shutil.which('pkexec')), 'command': cmd, 'command_text': ' '.join(cmd), 'manual': ('sudo ' + ' '.join(spec['install'] + missing)) if (missing and spec) else ('./install.sh (step 7)' if perm else ''),
             'needed': bool(missing) or bool(miss_pip) or perm or (gpu is not False and not built and not miss_gpu and bool(q)),
             'dismissed': dismissed, 'job': s}
+    d['jobs'] = {}
+    for name in os.listdir(STATUS) if os.path.isdir(STATUS) else []:
+        if name.startswith('_deps-') and name.endswith('.json'):
+            job = read_status(name[:-5])
+            if job and job.get('component'): d['jobs'][job['component']] = job
     d['components'] = deps_components(d)
     d['total'] = len(d['components']); d['needed'] = bool(d['components'])
     return d
@@ -482,6 +489,7 @@ def deps_components(d):
     try:
         pip_ready = subprocess.run([py, '-m', 'pip', '--version'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10).returncode == 0
     except OSError: pip_ready = False
+    d['pip_ready'] = pip_ready
     if not pip_ready:
         rows.append({'id': 'bootstrap:pip', 'name': 'pip', 'kind': 'bootstrap', 'installed': False, 'can_install': True,
                      'description': 'Package installer for the app’s private Python environment.', 'note': 'Installs only the bundled pip package. No download required.'})
@@ -493,12 +501,12 @@ def deps_components(d):
     planned = {item['id'] for item in (plan or {}).get('items', [])}
     for package in d['missing']:
         if 'system:' + package not in planned:
-            rows.append({'id': 'system:' + package, 'name': package, 'kind': 'system', 'installed': False, 'can_install': False,
+            rows.append({'id': 'system:' + package, 'name': package, 'kind': 'system', 'installed': False, 'can_install': d['pkexec'], 'resolve_first': True,
                          'description': 'System package.', 'note': 'Refresh the package list to include its supporting libraries.'})
     for package in _sysdeps().get('pip', {}).get('vad', []):
         key = package_plan.canonical(package)
         if key not in inventory and 'python:' + key not in planned:
-            rows.append({'id': 'python:' + key, 'name': package, 'kind': 'python', 'installed': False, 'can_install': False,
+            rows.append({'id': 'python:' + key, 'name': package, 'kind': 'python', 'installed': False, 'can_install': True, 'resolve_first': True,
                          'description': 'Optional voice-detection package.', 'note': 'Refresh the package list to include all supporting libraries.'})
     if d['missing_perm']:
         rows.append({'id': 'permission', 'name': 'Typing permission', 'kind': 'permission', 'installed': False, 'can_install': d['pkexec'],
@@ -513,10 +521,11 @@ def deps_install(component=None):
         print('Choose a package or component in Settings > Setup & uninstall, or use deps install COMPONENT. Run deps --json to list component IDs.', file=sys.stderr)
         return 2
     os.makedirs(STATUS, exist_ok=True)
-    with open(STATUS + '/_deps.lock', 'a') as lock:
+    if not re.fullmatch(r'[A-Za-z0-9_.:+-]+', component): return 2
+    with open(STATUS + '/_deps-' + component.replace(':', '_') + '.lock', 'a') as lock:
         try: fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
-            print('Another setup component is being installed. Wait for it to finish.', file=sys.stderr)
+            print('This component is already being installed.', file=sys.stderr)
             return 1
         return _deps_install_one(component)
 
@@ -524,7 +533,7 @@ def deps_install(component=None):
 def _deps_install_one(component):
     signal.signal(signal.SIGTERM, _on_term)
     def st(status, msg, **extra):
-        write_status(DEPS_ID, status=status, msg=msg, component=component, **extra)
+        write_status('_deps-' + component.replace(':', '_'), status=status, msg=msg, component=component, **extra)
         print('  ' + msg, flush=True)
     try:
         st('installing', 'Checking package requirements…', pct=0)
@@ -532,16 +541,19 @@ def _deps_install_one(component):
         if not os.path.exists(py): raise Fail('The app’s Python environment is missing. Run the main installer to repair it.')
         d = deps_status()
         if component == 'catalog':
+            if not d.get('pip_ready'): raise Fail('Install pip using its own button below, then refresh the package list.')
             package_plan.resolve(PACKAGE_PLAN, py, d['pm'], d['missing'], _sysdeps().get('pip', {}).get('vad', []), lambda message: st('installing', message))
             st('done', 'Package list refreshed. Choose the packages you want to install.'); return 0
         if component == 'bootstrap:pip':
             st('installing', 'Installing the bundled pip package…', pct=100)
-            package_plan.run([py, '-m', 'ensurepip'])
+            package_plan.run([py, '-c', "import ensurepip, pathlib, runpy, sys; wheel = next((pathlib.Path(ensurepip.__file__).parent / '_bundled').glob('pip-*.whl')); sys.path.insert(0, str(wheel)); sys.argv = ['pip', 'install', '--no-deps', '--no-index', str(wheel)]; runpy.run_module('pip', run_name='__main__')"])
             st('done', 'pip installed.', pct=100); return 0
         if component.startswith(('system:', 'python:')):
             plan = package_plan.load(PACKAGE_PLAN, py)
             item = next((e for e in (plan or {}).get('items', []) if e['id'] == component), None)
-            if item is None: raise Fail('Refresh the package list first. Each supporting package will get its own Install button.')
+            if item is None:
+                if not d.get('pip_ready'): raise Fail('Install pip using its own button first, then refresh the package list.')
+                raise Fail('Refresh the package list first. Each supporting package has its own Install button.')
             if package_plan.installed(item, py, d['pm']):
                 st('done', item['name'] + ' is already installed.', pct=100); return 0
             def progress(pct, got, total):
@@ -563,7 +575,13 @@ def _deps_install_one(component):
             if missing_tools or d['missing_gpu']: raise Fail('Install the listed build packages first: ' + ', '.join(d['missing_gpu'] or missing_tools))
             st('building', 'Building the graphics-card engine…')
             p = subprocess.Popen(['bash', N + '/scripts/build-gpu.sh', N], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, stdin=subprocess.DEVNULL, start_new_session=True)
-            try: out = p.communicate()[0]
+            try:
+                out = ''
+                for line in p.stdout:
+                    out = (out + line)[-3000:]
+                    match = re.search(r'GVT_PROGRESS:(\d+):(.*)', line)
+                    if match: st('building', match[2].strip(), pct=int(match[1]))
+                p.wait()
             except BaseException:
                 try: os.killpg(p.pid, signal.SIGTERM)
                 except OSError: pass

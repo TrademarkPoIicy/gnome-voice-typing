@@ -1,5 +1,6 @@
 """Resolve optional packages without installing them; download/install exactly one artifact."""
 import hashlib
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -152,23 +153,27 @@ def download(item, folder, progress):
 def install_one(item, python, pm, progress):
     with tempfile.TemporaryDirectory(prefix='gvt-package-') as temp:
         artifact = download(item, temp, progress)
-        if item['kind'] == 'python':
-            # A local wheel, no index and no dependency installation: exactly one distribution.
-            run([python, '-m', 'pip', 'install', '--no-deps', '--no-index', '--no-build-isolation', '--disable-pip-version-check', artifact])
-        elif pm == 'dnf':
-            # RPM checks signatures and requirements but never downloads dependency packages.
-            signature = run(['rpmkeys', '--checksig', artifact])
-            if 'NOKEY' in signature or 'NOT OK' in signature or 'signatures ok' not in signature.lower(): raise RuntimeError('The repository signing key is not trusted. Nothing was installed.')
-            run(['pkexec', 'rpm', '-U', '--', artifact])
-        elif pm == 'apt':
-            # Refuse installation until all supporting packages have been individually installed.
-            preview = run(['apt-get', '-s', '--no-install-recommends', 'install', artifact])
-            extra = [line.split()[1].split(':')[0] for line in preview.splitlines() if line.startswith('Inst ') and line.split()[1].split(':')[0] != item['package']]
-            if extra: raise RuntimeError('Install these listed supporting packages first: ' + ', '.join(extra))
-            run(['pkexec', 'dpkg', '--install', artifact])
-        elif pm == 'pacman':
-            signature_item = dict(item, url=item['url'] + '.sig'); signature_item.pop('sha256', None)
-            download(signature_item, temp, lambda *args: None)
-            run(['pkexec', 'pacman', '-U', '--noconfirm', artifact])
-        else: raise RuntimeError('Unsupported package manager.')
-        if not installed(item, python, pm): raise RuntimeError('Installation was not confirmed. This package remains in the list.')
+        lock_path = os.path.join(os.path.dirname(python), '.gvt-' + item['kind'] + '-install.lock')
+        with open(lock_path, 'a') as lock:
+            progress(100, 0, 0)
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            if item['kind'] == 'python':
+                # A local wheel, no index and no dependency installation: exactly one distribution.
+                run([python, '-m', 'pip', 'install', '--no-deps', '--no-index', '--no-build-isolation', '--disable-pip-version-check', artifact])
+            elif pm == 'dnf':
+                # RPM checks signatures and requirements but never downloads dependency packages.
+                signature = run(['rpmkeys', '--checksig', artifact])
+                if 'NOKEY' in signature or 'NOT OK' in signature or 'signatures ok' not in signature.lower(): raise RuntimeError('The repository signing key is not trusted. Nothing was installed.')
+                run(['pkexec', 'rpm', '-U', '--', artifact])
+            elif pm == 'apt':
+                # Refuse installation until all supporting packages have been individually installed.
+                preview = run(['apt-get', '-s', '--no-install-recommends', 'install', artifact])
+                extra = [line.split()[1].split(':')[0] for line in preview.splitlines() if line.startswith('Inst ') and line.split()[1].split(':')[0] != item['package']]
+                if extra: raise RuntimeError('Install these listed supporting packages first: ' + ', '.join(extra))
+                run(['pkexec', 'dpkg', '--install', artifact])
+            elif pm == 'pacman':
+                signature_item = dict(item, url=item['url'] + '.sig'); signature_item.pop('sha256', None)
+                download(signature_item, temp, lambda *args: None)
+                run(['pkexec', 'pacman', '-U', '--noconfirm', artifact])
+            else: raise RuntimeError('Unsupported package manager.')
+            if not installed(item, python, pm): raise RuntimeError('Installation was not confirmed. This package remains in the list.')

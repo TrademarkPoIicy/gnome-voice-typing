@@ -16,5 +16,7 @@
   "capitalization": "model",
   "spoken_punctuation": false,
   "trailing_space": true,
-  "vocabulary": []
+  "vocabulary": [],
+  "follow_field": false,
+  "settings_theme": "dark"
 }

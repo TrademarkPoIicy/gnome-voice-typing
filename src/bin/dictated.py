@@ -290,7 +290,7 @@ class Daemon:
         self.mseq += 1
         d = {'cli': N + '/bin/voice-typing', 'current': self.cur_id, 'current_name': self.name_of(self.cur_id),
              'models': [dict(e, device=dev_of(e)) for e in CATALOG if installed(e)], 'equiv': EQUIV, 'defaults': DEFAULTS, 'note': self.dev_note,
-             'settings': {**customization.settings(CFG), 'auto_pause_seconds': CFG['auto_pause_seconds'], 'mic': CFG.get('mic', ''), 'sounds': bool(CFG.get('sounds', True)), 'follow_field': bool(CFG.get('follow_field', True)),
+             'settings': {**customization.settings(CFG), 'auto_pause_seconds': CFG['auto_pause_seconds'], 'mic': CFG.get('mic', ''), 'sounds': bool(CFG.get('sounds', True)), 'follow_field': bool(CFG.get('follow_field', False)),
                           'noise_mode': CFG.get('noise_mode', 'auto'), 'silence_threshold': CFG.get('silence_threshold', 0.5), 'noise_suppression': bool(CFG.get('noise_suppression', True)),
                           'noise_floor': CFG.get('noise_floor', 0.0), 'noise_floor_raw': CFG.get('noise_floor_raw', 0.0), 'streaming': CFG.get('streaming', 'auto'),
                           'device': dev_of(cat_entry(self.cur_id)), 'mics': list_mics()},

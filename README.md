@@ -258,3 +258,13 @@ existing files remain available until you delete them. Files are owner-readable 
 Review personal dictation and settings before sharing. Long sessions can create large
 files. Native crashes and events before logging was enabled may need separate system
 logs. The explicit `GVT_DRY_RUN` development mode retains its separate legacy log.
+
+### Microphone recovery (0.1.16)
+
+Saving a different microphone now reconnects both dictation and the Settings meter
+to the selected input. Old room-noise measurements are cleared when switching
+microphones. Pause/resume closes old recorder streams before starting new ones.
+Stalled audio streams time out and show a microphone error; five seconds of digital
+silence shows “No microphone signal” and automatically clears when input returns.
+Calibration rejects an input that sends only zero samples. Developer logs include
+raw and processed microphone levels to help distinguish silence from suppression.

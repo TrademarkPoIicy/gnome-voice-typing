@@ -1487,7 +1487,7 @@ export default class VoiceTypingOverlay extends Extension {
         }
         return col;
     }
-    _noiseTick() { if (!this._info || this._info.state !== 'listening') this._cli(['meter']); }
+    _noiseTick() { if (this._panelOpen && this._page === 'mic' && (!this._info || this._info.state !== 'listening')) this._cli(['meter']); }
     _noiseCalibrate() {
         this._info = Object.assign({}, this._info, {calib: 'running'}); this._cli(['calibrate']); this._updateNoiseMeter();
         if (this._saveBtn && this._saveBtn._upd) this._saveBtn._upd();

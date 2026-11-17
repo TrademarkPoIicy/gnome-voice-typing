@@ -4,6 +4,7 @@ import glob, os, sys, json, socket, threading, queue, time, subprocess, re, sign
 import devlog
 devlog.install_exception_hooks('daemon')
 devlog.start('daemon startup')
+import select
 import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import audiofx
@@ -263,6 +264,30 @@ CMD_CLOSE = {'close dictation', 'close voice typing', 'exit dictation', 'quit di
 CMD_DELETE = {'delete that', 'scratch that', 'undo that', 'delete last phrase'}
 def norm(t): return re.sub(r'[^a-z ]', '', t.lower()).strip()
 
+def read_audio(rec, stopped=None):
+    """Read one PCM frame without letting a stalled PipeWire stream hang a worker."""
+    data = bytearray(); deadline = time.monotonic() + 3
+    while len(data) < CHUNK:
+        if stopped and stopped(): return b''
+        if time.monotonic() >= deadline: raise RuntimeError('Microphone stream stopped sending audio')
+        ready, _, _ = select.select([rec.stdout], [], [], 0.1)
+        if not ready: continue
+        part = os.read(rec.stdout.fileno(), CHUNK - len(data))
+        if not part: return bytes(data)
+        data.extend(part)
+    return bytes(data)
+
+
+def stop_recorder(rec):
+    if rec is None: return
+    try:
+        if rec.poll() is None: rec.terminate()
+        rec.wait(timeout=1)
+    except subprocess.TimeoutExpired:
+        rec.kill(); rec.wait(timeout=1)
+    except OSError: pass
+
+
 class Session:
     def __init__(self, **kw):
         self.prefix = ''; self.enter = False; self.src = None; self.oneshot = False; self.dry = False
@@ -278,6 +303,7 @@ class Phrase:
 class Daemon:
     def __init__(self):
         self.state = 'idle'; self.lock = threading.RLock(); self.stop = threading.Event()
+        self.recorder = None; self.monitor_recorder = None; self.monitor_epoch = 0; self.input_warning = ''
         self.thread = None; self.q = queue.Queue(); self.pending = 0; self.asr = None; self.asr_err = None
         self.level = 0.0; self.err_until = 0; self.err_text = ''; self.paused_at = 0
         self.typer = Typer(); self.last_typed = ''; self.sess = None
@@ -329,12 +355,25 @@ class Daemon:
             eq = cat_entry(EQUIV.get(self.cur_id))
             mid = eq['id'] if (eq and dev_of(eq) == dev and installed(eq)) else DEFAULTS[dev]
         if dev in ('gpu', 'cpu') and (not mid or mid == self.cur_id) and dev_of(cat_entry(self.cur_id)) == dev: ch['device'] = dev
+        mic_changed = 'mic' in ch and ch['mic'] != CFG.get('mic', '')
+        audio_changed = mic_changed or ('noise_suppression' in ch and ch['noise_suppression'] != CFG.get('noise_suppression', True))
+        if mic_changed: ch.update(noise_floor=0.0, noise_floor_raw=0.0)
+        if audio_changed and self.calib.get('status') == 'running':
+            raise ValueError('Wait for microphone calibration to finish, then save the new microphone.')
         if ch:
             if ch.get('developer_logging') is False: devlog.event('daemon', 'LOGGING DISABLED')
             was_logging = CFG.get('developer_logging') is True
             persist_cfg(**ch)
             if ch.get('developer_logging') is True and not was_logging: devlog.start('logging enabled')
             devlog.event('daemon', 'SETTINGS CHANGED', changes=ch)
+        if audio_changed:
+            with self.lock:
+                self._stop_monitor()
+                self.input_warning = ''
+                if self.state == 'listening':
+                    session = self.sess or Session()
+                    self.pause(); self.start(session)
+                else: self.meter()
         if mid and mid != self.cur_id:
             if self.switch['status'] == 'loading': return
             ent = next((e for e in CATALOG if e['id'] == mid), None)
@@ -404,6 +443,7 @@ class Daemon:
         busy = self.pending > 0
         if EXTRA.get('no_model') and s in ('listening', 'paused', 'starting'): ov('paused', text='No speech model yet')
         elif s in ('listening', 'paused') and time.time() < self.err_until: ov('error', text=self.err_text)
+        elif s == 'listening' and self.input_warning: ov('error', text=self.input_warning)
         elif s == 'listening' and self.asr is None and not self.asr_err: ov('starting', busy=True)
         elif s in ('listening', 'paused', 'starting'): ov(s, self.level, busy=busy)
         else: ov('hidden')
@@ -458,6 +498,14 @@ class Daemon:
 
     def start(self, sess):
         if self.state == 'listening': return
+        if self.calib.get('status') == 'running':
+            self.error('Microphone calibration running', detail='Wait for calibration to finish, then resume dictation.'); self.show(); return
+        if self.thread and self.thread.is_alive():
+            self._halt()
+            if self.thread.is_alive():
+                self.error('Microphone is still stopping', detail='Wait a moment and try again.'); self.show(); return
+        self._stop_monitor()
+        self.input_warning = ''
         if self.state == 'idle': devlog.start('dictation opened')
         devlog.event('daemon', 'LISTENING', previous_state=self.state, microphone=CFG.get('mic', ''), model=self.cur_id)
         self.sess = sess; self.stop.clear(); self.state = 'listening'; self.err_until = 0
@@ -466,6 +514,7 @@ class Daemon:
 
     def _halt(self):
         self.stop.set()
+        stop_recorder(self.recorder)
         t = self.thread
         if t and t is not threading.current_thread(): t.join(5)
 
@@ -510,11 +559,26 @@ class Daemon:
         return 0.75 - 0.5 * s, 0.60 - 0.5 * s, 4.0 - 3.0 * s, (40.0 if dn else 150.0)
 
     def rec_loop(self, sess):
+        try:
+            self._record_session(sess)
+        except Exception as error:
+            log('recording failed', repr(error))
+            if not self.stop.is_set():
+                self.state = 'paused'; self.paused_at = time.time()
+                self.error('Microphone audio stopped', detail=str(error) + '. Check the microphone in Settings > Microphone & noise, then resume.')
+                self.show()
+        finally:
+            stop_recorder(self.recorder)
+            if self.recorder: self.recorder.stdout.close()
+            self.recorder = None
+
+    def _record_session(self, sess):
         cmd = self._mic_cmd()
         if sess.src: cmd = ['ffmpeg', '-v', 'quiet', '-re', '-i', sess.src, '-af', 'adelay=500,apad=pad_dur=2.5', '-f', 's16le', '-ar', '16000', '-ac', '1', '-']
         devlog.event('audio', 'RECORDER START', arguments=cmd)
         try:
             rec = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            self.recorder = rec
             devlog.capture_lines(rec.stderr, 'audio', 'RECORDER OUTPUT')
         except Exception as e:
             self.error('Microphone unavailable', detail='Open Settings > Microphone & noise and select a connected microphone. Check that it is not muted in system Sound settings, then try again.'); log('recorder failed', repr(e)); self.state = 'paused'; self.show(); return
@@ -522,7 +586,7 @@ class Daemon:
         dn, vad = self._frontend()
         log('listening: noise suppression=%s, vad=%s, noise mode=%s, streaming=%s' % (dn.name if dn else 'off', 'silero' if vad.ok else 'energy', CFG.get('noise_mode', 'auto'), CFG.get('streaming', 'auto')))
         fl = audiofx.Floor(); preroll = collections.deque(maxlen=4); phrase = []; in_speech = False; silent = 0; loud_n = 0
-        last_speech = time.time(); eof = False; ph = None; n_chunks = 0
+        last_speech = time.time(); eof = False; ph = None; n_chunks = 0; silent_input_since = time.monotonic()
         def submit(chunks, trail, ph):
             if loud_n < 3: return                      # blip, ignore
             audio = np.frombuffer(b''.join(chunks[:len(chunks) - max(0, trail - 2)] if trail > 2 else chunks), dtype=np.int16).astype(np.float32) / 32768.0
@@ -531,11 +595,21 @@ class Daemon:
                 if self.partial is not None and self.partial[0] is ph: self.partial = None
             self.pending += 1; self.q.put((audio, sess, ph)); log('phrase queued %.1fs' % (len(audio) / RATE))
         while not self.stop.is_set():
-            d = rec.stdout.read(CHUNK)
+            d = read_audio(rec, self.stop.is_set)
             if not d: eof = True; break
             d = d[:len(d) // 2 * 2]
             if not d: continue
             d_raw = d
+            raw_samples = np.frombuffer(d_raw, dtype=np.int16).astype(np.float32)
+            raw_rms = float(np.sqrt(np.mean(raw_samples * raw_samples))) if len(raw_samples) else 0.0
+            if raw_rms > 0:
+                silent_input_since = time.monotonic()
+                if self.input_warning:
+                    log('microphone signal recovered'); self.input_warning = ''
+            elif time.monotonic() - silent_input_since > 5 and not sess.src and not self.input_warning:
+                self.input_warning = 'No microphone signal'
+                self.last_error = {'summary': self.input_warning, 'detail': 'The selected microphone is sending silence. Check mute and input volume, or select System default in Microphone & noise.', 'time': time.strftime('%H:%M')}
+                log('microphone sending digital silence', CFG.get('mic', '')); self.write_models()
             if dn: d = dn.process(d)
             x = np.frombuffer(d, dtype=np.int16).astype(np.float32)
             rms = float(np.sqrt(np.mean(x * x))) if len(x) else 0.0
@@ -553,7 +627,7 @@ class Daemon:
             self.rms = rms; self.floor = fl.v or 0.0; self.level = min(1.0, (max(0.0, rms - self.floor) / 3000.0) ** 0.5)
             EXTRA['mic'] = self._meter_lv(rms); EXTRA['floor_lv'] = self._meter_lv(manual and float(CFG.get('noise_floor') or 0.0) or self.floor); EXTRA['speech'] = bool(loud)
             if n_chunks % 10 == 0 or bool(loud) != getattr(self, '_logged_speech', None):
-                devlog.event('audio', 'VOICE DETECTION', rms=rms, floor=self.floor, threshold=e_thr, probability=p, speech=bool(loud), in_phrase=bool(in_speech))
+                devlog.event('audio', 'VOICE DETECTION', raw_rms=raw_rms, microphone=CFG.get('mic', ''), rms=rms, floor=self.floor, threshold=e_thr, probability=p, speech=bool(loud), in_phrase=bool(in_speech))
                 self._logged_speech = bool(loud)
             self.show('listening')
             d_asr = d if CFG.get('noise_suppression_asr', True) else d_raw      # the recognizer hears the denoised audio unless noise_suppression_asr is false (voice detection always uses the denoised audio)
@@ -588,18 +662,28 @@ class Daemon:
                 self.state = 'idle'; self.sess = None; self.show(); self.typer.close()
 
     # --- microphone monitor (live level meter for the settings panel while not listening) and room-noise calibration
+    def _stop_monitor(self):
+        self.monitor_epoch += 1
+        self.meter_until = 0
+        stop_recorder(self.monitor_recorder)
+        if self.mon and self.mon is not threading.current_thread(): self.mon.join(4)
+
     def meter(self):
         self.meter_until = time.time() + 6
         if self.state != 'listening' and not (self.mon and self.mon.is_alive()) and self.calib.get('status') != 'running':
             self.mon = threading.Thread(target=self._monitor, daemon=True); self.mon.start()
 
     def _monitor(self):
-        try: rec = subprocess.Popen(self._mic_cmd(), stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-        except Exception as e: log('meter: recorder failed', repr(e)); return
-        dn, vad = self._frontend(); fl = audiofx.Floor(); n = 0
+        epoch = self.monitor_epoch
         try:
-            while time.time() < self.meter_until and self.state != 'listening' and self.calib.get('status') != 'running':
-                d = rec.stdout.read(CHUNK)
+            rec = subprocess.Popen(self._mic_cmd(), stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            self.monitor_recorder = rec
+        except Exception as e: log('meter: recorder failed', repr(e)); return
+        dn = None
+        try:
+            dn, vad = self._frontend(); fl = audiofx.Floor(); n = 0
+            while epoch == self.monitor_epoch and time.time() < self.meter_until and self.state != 'listening' and self.calib.get('status') != 'running':
+                d = read_audio(rec, lambda: epoch != self.monitor_epoch or time.time() >= self.meter_until or self.state == 'listening' or self.calib.get('status') == 'running')
                 if not d: break
                 d = d[:len(d) // 2 * 2]
                 if dn: d = dn.process(d)
@@ -610,9 +694,11 @@ class Daemon:
                 EXTRA['speech'] = bool(p is not None and p >= 0.5) if n > 3 else False
                 self.level = min(1.0, (rms / 3000.0) ** 0.5)
                 if self.state != 'listening': self.show()
+        except Exception as error:
+            log('microphone meter failed', repr(error))
         finally:
-            try: rec.terminate(); rec.wait(2)
-            except Exception: rec.kill()
+            stop_recorder(rec); rec.stdout.close()
+            if self.monitor_recorder is rec: self.monitor_recorder = None
             if dn: dn.close()
             if self.state != 'listening': self.level = 0.0; EXTRA['mic'] = 0.0; EXTRA['speech'] = False; self.show()
 
@@ -625,22 +711,20 @@ class Daemon:
 
     def _calibrate(self):
         """Measure the room for 2 s through the same front end the dictation uses and save the floor (noise_floor, after suppression) and noise_floor_raw."""
-        self.meter_until = 0
-        t = self.mon
-        if t and t.is_alive(): t.join(1.5)
+        self._stop_monitor()
         raw = []; proc = []; rec = None; dn = None
         try:
             rec = subprocess.Popen(self._mic_cmd(), stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
             dn, _ = self._frontend(); t0 = time.time()
             for i in range(24):
-                d = rec.stdout.read(CHUNK)
+                d = read_audio(rec)
                 if not d: break
                 d = d[:len(d) // 2 * 2]; x = np.frombuffer(d, dtype=np.int16).astype(np.float32); r0 = float(np.sqrt(np.mean(x * x))) if len(x) else 0.0
                 if dn: d = dn.process(d)
                 y = np.frombuffer(d, dtype=np.int16).astype(np.float32); r1 = float(np.sqrt(np.mean(y * y))) if len(y) else 0.0
                 if i >= 4: raw.append(r0); proc.append(r1)           # skip the first 0.4 s: the stream and the denoiser are still starting
                 EXTRA['mic'] = self._meter_lv(r1); self.show()
-            if len(proc) < 8: raise RuntimeError('microphone gave no audio')
+            if len(proc) < 8 or max(raw, default=0) == 0: raise RuntimeError('Microphone gave no audio. Check mute/input volume or choose another microphone.')
             fl = max(1.0, round(float(np.percentile(proc, 90)), 1)); flr = round(float(np.percentile(raw, 90)), 1)      # 90th percentile of the quiet room: an upper bound of its noise
             persist_cfg(noise_floor=fl, noise_floor_raw=flr, noise_peak=round(float(np.max(proc)), 1))
             self.calib = {'status': 'done', 'floor': fl, 'raw': flr}; log('calibrated room noise: floor %.1f (raw %.1f) over %.1fs' % (fl, flr, time.time() - t0))

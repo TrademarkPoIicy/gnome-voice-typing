@@ -129,9 +129,9 @@ esac
 step "2/10 System packages"
 # package lists per distro: RUNTIME always; BUILD only for the GPU engine
 case "$PM" in
-  dnf)    RUNTIME="python3 python3-gobject gtk4 at-spi2-core pipewire-utils pulseaudio-utils wl-clipboard ydotool rnnoise"; BUILD="git cmake gcc-c++ make ninja-build glslc vulkan-headers vulkan-loader-devel spirv-headers-devel"; GPUPKG="vulkan-tools mesa-vulkan-drivers"; PQ='rpm -q --quiet';;
+  dnf)    RUNTIME="python3 python3-gobject gtk4 at-spi2-core pipewire-utils pulseaudio-utils wl-clipboard ydotool"; BUILD="git cmake gcc-c++ make ninja-build glslc vulkan-headers vulkan-loader-devel spirv-headers-devel"; GPUPKG="vulkan-tools mesa-vulkan-drivers"; PQ='rpm -q --quiet';;
   apt)    RUNTIME="python3 python3-venv python3-gi gir1.2-gtk-4.0 gir1.2-atspi-2.0 pipewire-bin pulseaudio-utils wl-clipboard ydotool"; BUILD="git cmake g++ make ninja-build libvulkan-dev glslc spirv-headers"; GPUPKG="vulkan-tools mesa-vulkan-drivers"; PQ='dpkg -s';;
-  pacman) RUNTIME="python python-gobject gtk4 at-spi2-core pipewire libpulse wl-clipboard ydotool rnnoise"; BUILD="git cmake gcc make ninja vulkan-headers vulkan-icd-loader spirv-headers shaderc"; GPUPKG="vulkan-tools"; PQ='pacman -Qi';;
+  pacman) RUNTIME="python python-gobject gtk4 at-spi2-core pipewire libpulse wl-clipboard ydotool"; BUILD="git cmake gcc make ninja vulkan-headers vulkan-icd-loader spirv-headers shaderc"; GPUPKG="vulkan-tools"; PQ='pacman -Qi';;
   *) RUNTIME=""; BUILD=""; GPUPKG=""; PQ=true;;
 esac
 # ydotool 1.x is required (--socket-path). Some distros still ship 0.1.x (Ubuntu 24.04, Debian 12): then it is built from source instead.
@@ -152,7 +152,6 @@ if [ "$NO_SYSDEPS" = 1 ]; then
 elif [ -z "$MISSING" ]; then ok "All required packages are already installed."
 else
   echo "    Missing packages: $MISSING"
-  case " $MISSING " in *" rnnoise "*) echo "    (rnnoise is optional: it filters background noise out of the microphone. Dictation works without it.)";; esac
   echo "    These are installed with your distro's package manager. That needs administrator rights, so I will run:"
   case "$PM" in dnf) CMD="$SUDO dnf install -y $MISSING";; apt) CMD="$SUDO apt-get install -y $MISSING";; pacman) CMD="$SUDO pacman -S --needed --noconfirm $MISSING";; esac
   echo "      $CMD"
@@ -238,18 +237,18 @@ fi
 
 # optional: Silero voice detection (needs onnxruntime + faster-whisper, which ships the Silero model) - better than the loudness-based detector
 VADPKG="onnxruntime faster-whisper"
-if [ "$DRY" = 1 ]; then dry "optional: pip install $VADPKG   (better voice detection; asked first)"
+if [ "$DRY" = 1 ]; then dry "offer each optional Python package separately: $VADPKG"
 elif [ -x "$DATA/venv/bin/python" ]; then
-  if "$DATA/venv/bin/python" -c 'import onnxruntime, faster_whisper' 2>/dev/null; then ok "Voice detection packages already installed."
-  else
-    echo "    Optional: better voice detection (Silero) needs two Python packages: $VADPKG."
-    echo "    They go into the app's own Python environment (no administrator rights). Without them a simpler loudness-based detector is used."
-    if ask "Download them now?" y; then
-      "$DATA/venv/bin/python" -m pip --version >/dev/null 2>&1 || "$DATA/venv/bin/python" -m ensurepip --quiet >/dev/null 2>&1   # uv-made environments have no pip
-      if "$DATA/venv/bin/python" -m pip install --quiet --disable-pip-version-check $VADPKG && "$DATA/venv/bin/python" -c 'import onnxruntime, faster_whisper'; then ok "Voice detection packages installed."
-      else warn "Could not install them (continuing). Later: Settings shows an Install button, or run: voice-typing-models deps install"; fi
-    else say "Skipped. Settings offers them later (one click)."; fi
-  fi
+  for VADONE in $VADPKG; do
+    VADMODULE="${VADONE//-/_}"
+    if "$DATA/venv/bin/python" -c "import $VADMODULE" 2>/dev/null; then ok "$VADONE already installed."; continue; fi
+    say "Optional app package: $VADONE (required dependencies may also be downloaded; no administrator rights)."
+    if ask "Install $VADONE?" n; then
+      "$DATA/venv/bin/python" -m pip --version >/dev/null 2>&1 || "$DATA/venv/bin/python" -m ensurepip --quiet >/dev/null 2>&1
+      if "$DATA/venv/bin/python" -m pip install --quiet --disable-pip-version-check "$VADONE" && "$DATA/venv/bin/python" -c "import $VADMODULE"; then ok "$VADONE installed."
+      else warn "Could not install $VADONE. Later: Settings > Setup & uninstall > $VADONE > Install."; fi
+    else say "Skipped $VADONE. You can install it individually in Settings > Setup & uninstall."; fi
+  done
 fi
 
 # ---------------------------------------------------------------- 5. GPU engine

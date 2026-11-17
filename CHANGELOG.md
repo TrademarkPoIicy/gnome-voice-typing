@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.10
+
+- List setup packages individually, with a description, installed status and per-item Install button; remove the install-all action.
+- Keep typing permission and GPU engine builds separate, and leave speech-model downloads to the model picker.
+- Offer optional Python packages individually during installation and stop bundling RNNoise with required system packages.
+
 ## 0.1.9
 
 - Add a native Personalization editor for bar appearance, dictation formatting, preferred vocabulary and start/pause/close shortcuts.

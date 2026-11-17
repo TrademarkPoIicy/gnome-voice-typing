@@ -29,6 +29,10 @@ the text box you are typing in.
   fetches, checksum-verifies and installs it, with a progress bar and Cancel. Installed models show **Uninstall** (not available for
   the model in use).
 
+## Optional packages
+
+Open **Settings > Setup & uninstall** to choose packages individually. Each row explains its purpose and whether it needs a password. Voice-detection add-ons (`onnxruntime` and `faster-whisper`) are listed separately; both are needed for Silero detection. Installing a package may also install dependencies required by that package. The terminal installer asks about each optional Python add-on separately, defaulting to Skip. RNNoise is available from the package list on supported distributions and is no longer bundled with required system packages.
+
 ## Personalization
 
 Open the gear menu and choose **Personalization → Open Personalization**, or run `voice-typing preferences`.
@@ -125,7 +129,7 @@ shortcut conflicts, asks, then removes only that accelerator from that one setti
 - Command line: `voice-typing toggle | pause | resume | close | status | quit`, `voice-typing --models`,
   `voice-typing --model parakeet`, `voice-typing --apply '{"device":"cpu"}'`, `voice-typing --apply '{"sounds":false}'`.
   Model management: `voice-typing-models list | status | install ID | cancel ID | remove ID | verify | adopt`.
-  System packages: `voice-typing-models deps` shows what's missing for the graphics-card engine and typing; `voice-typing-models deps install` installs it (password prompt) and builds the engine. The settings panel offers the same on first launch.
+  Packages: **Settings > Setup & uninstall** lists individual system packages, Python add-ons, typing permission and the graphics-card engine, each with its own **Install** button or **Installed** status. Only the selected item and its required dependencies are installed. Engine builds do not download speech models. From a terminal, `voice-typing-models deps` lists component IDs and `voice-typing-models deps install COMPONENT` installs one item—for example `python:onnxruntime` or `system:rnnoise`. There is no install-all action.
 - Accented and non-English characters are typed through the clipboard (`Ctrl+V`, or `Ctrl+Shift+V` in terminals); your clipboard is
   restored afterwards. In pop-up boxes that refuse clipboard access, accents fall back to plain letters ("café" becomes "cafe").
 

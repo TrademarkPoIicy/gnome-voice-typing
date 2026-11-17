@@ -19,7 +19,7 @@ for pm in ('dnf', 'apt', 'pacman'):
     runtime, build, gpupkg = (x.split() for x in line.groups())
     if set(d[pm]['gpu']) != set(build + gpupkg): bad.append('%s gpu: %s vs %s' % (pm, sorted(d[pm]['gpu']), sorted(build + gpupkg)))
     if not set(d[pm]['typing']) <= set(runtime): bad.append(pm + ' typing not in RUNTIME')
-    if not set(d[pm].get('noise', [])) <= set(runtime): bad.append(pm + ' noise not in RUNTIME')
+    if set(d[pm].get('noise', [])) & set(runtime): bad.append(pm + ' optional noise package bundled in required RUNTIME')
 vad = re.search(r'^VADPKG="([^"]*)"', sh, re.M)
 if not vad or vad.group(1).split() != d['pip']['vad']: bad.append('pip vad list differs from VADPKG in install.sh')
 print('\n'.join(bad)); sys.exit(1 if bad else 0)

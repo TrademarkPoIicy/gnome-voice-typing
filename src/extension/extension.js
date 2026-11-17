@@ -303,20 +303,24 @@ export default class VoiceTypingOverlay extends Extension {
     _depsTick() {
         if (!this._bar || !this._deps) { this._depsTimer = 0; return GLib.SOURCE_REMOVE; }
         const s = this._depsJob(), old = this._deps.job;
-        if (!s && this._depsPend && GLib.get_monotonic_time() - this._depsPend < 6e6) return GLib.SOURCE_CONTINUE;   // just started, no status file yet
+        if (this._depsPend && GLib.get_monotonic_time() - this._depsPend < 6e6 && (!s || s.t < this._depsStartedAt)) return GLib.SOURCE_CONTINUE; // Ignore the previous component's status while this helper starts.
         this._depsPend = 0;
         const sig = (j) => j ? j.status + '|' + (j.msg || '') : '';
         if (sig(s) !== sig(old)) { this._deps.job = s; if (this._panelOpen) this._buildPanel(); }
         if (s && ['installing', 'building', 'downloading', 'verifying'].includes(s.status)) return GLib.SOURCE_CONTINUE;
         this._depsTimer = 0;
         this._refreshDeps(); this._refreshCat();
-        if (s && s.status === 'done' && this._panelOpen) { this._sel.dev = 'gpu'; const g = (this._cat || []).find(e => e.id === 'parakeet-gpu' && e.state === 'installed'); if (g) this._sel.model = g.id; }
         return GLib.SOURCE_REMOVE;
     }
-    _depsInstall() {
-        if (!this._deps) return;
-        if (!this._spawnTool(['deps', 'install'])) { this._deps.job = {status: 'failed', msg: 'Could not start the installer.'}; this._buildPanel(); return; }
-        this._depsPend = GLib.get_monotonic_time(); this._deps.job = {status: 'installing', msg: 'Waiting for your password…'}; this._buildPanel(); this._depsTickStart();
+    _depsInstall(component) {
+        if (!this._deps || this._depsAckPending || this._depsPend || ['installing', 'building', 'downloading', 'verifying'].includes(this._deps.job?.status)) return;
+        if (!component || component.installed || !component.can_install) return;
+        ++this._depsRevision;
+        this._depsStartedAt = Date.now() / 1000 - 0.1;
+        if (!this._spawnTool(['deps', 'install', component.id])) { this._deps.job = {status: 'failed', component: component.id, msg: 'Could not start the installer.'}; this._buildPanel(); return; }
+        this._depsPend = GLib.get_monotonic_time();
+        this._deps.job = {status: 'installing', component: component.id, msg: 'Preparing ' + component.name + '…'};
+        this._buildPanel(); this._depsTickStart();
     }
     _depsAcknowledge() {
         if (this._depsAckPending) return;
@@ -340,54 +344,56 @@ export default class VoiceTypingOverlay extends Extension {
         if (this._deps) { this._deps.dismissed = true; this._deps.job = null; }
         this._buildPanel();
     }
-    // the prompt (full card when it matters, one compact line after "Not now" so it can be found again in Settings)
+    // Each package has its own action. The home page links to the full setup list.
     _depsCard() {
         const d = this._deps; if (!d) return null;
-        const job = d.job && d.job.status, busy = ['installing', 'building', 'downloading', 'verifying'].includes(job);
-        if (!d.needed && !busy && job !== 'failed' && job !== 'done') return null;
+        const job = d.job?.status, busy = !!this._depsPend || ['installing', 'building', 'downloading', 'verifying'].includes(job);
+        const setupPage = this._page === 'setup';
+        if (!setupPage && !d.needed && !busy && job !== 'failed' && job !== 'done') return null;
         const box = new St.BoxLayout({orientation: Clutter.Orientation.VERTICAL, x_expand: true,
-            style: 'margin-top: 8px; padding: 9px 11px; spacing: 6px; border-radius: 8px; border: 1px solid rgba(255,184,77,0.40); background-color: rgba(255,184,77,0.08);'});
-        const note = (t, c, sz) => wrapLbl(lbl(t, sz || 9.5, c || 'rgba(255,255,255,0.85)'));
-        const row = () => new St.BoxLayout({x_expand: true, style: 'spacing: 8px;'});
-        if (job === 'done') {
-            box.style = box.style.replace(/255,184,77/g, '108,203,95');
-            box.add_child(note(d.job.msg || 'All set.', 'rgba(108,203,95,0.95)', 10));
-            const r = row(); r.add_child(this._pill('OK', 'plain', () => this._depsAcknowledge())); box.add_child(r);
+            style: 'margin-top: 8px; padding: 9px 11px; spacing: 8px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.15);'});
+        const note = (text, color = SEC) => wrapLbl(lbl(text, 9.5, color));
+        if (!setupPage) {
+            box.add_child(note(busy ? (d.job?.msg || 'Installing…') : job === 'done' ? d.job.msg : 'Choose optional packages individually in Setup & uninstall.'));
+            box.add_child(this._pill('View packages', 'plain', () => { this._page = 'setup'; this._scrollKeep = 0; this._buildPanel(); }));
             return box;
         }
-        if (d.dismissed && !busy && job !== 'failed') {     // compact reminder
-            const n = d.total ?? d.missing.length;
-            const r = row(); const t = note(`Setup: ${n} optional package${n === 1 ? '' : 's'} missing`, SEC); t.x_expand = true; t.y_align = Clutter.ActorAlign.CENTER;
-            r.add_child(t); r.add_child(this._pill('Set up', 'primary', () => { this._deps.dismissed = false; this._spawnTool(['deps', 'undismiss']); this._buildPanel(); }));
-            box.style = 'margin-top: 6px; padding: 2px 2px;'; box.add_child(r); return box;
+        box.add_child(lbl('Packages & setup', 11, '#fff', 'bold'));
+        box.add_child(note('Install only the items you want. Required dependencies may be included with a selected package.'));
+        if (d.job) {
+            box.add_child(note(d.job.msg || 'Working…', job === 'done' ? '#7ddc70' : job === 'failed' ? '#ff9a9c' : '#fff'));
+            if (job === 'done' && !busy) box.add_child(this._pill('OK', 'plain', () => this._depsAcknowledge(), !this._depsAckPending));
         }
-        const gpuMissing = d.missing_gpu.length > 0, typMissing = d.missing_typing.length > 0;
-        const noiseMissing = (d.missing_noise || []).length > 0, pipMissing = (d.missing_pip || []).length > 0;
-        box.add_child(lbl(gpuMissing || (!d.engine_built && d.gpu !== false) ? 'Graphics-card setup needed' : 'Some packages are missing', 11, '#ffb84d', 'bold'));
-        if (gpuMissing) box.add_child(note('The graphics-card engine needs these system packages, and they are not installed: ' + d.missing_gpu.join(', ') + '. ' +
-            'The processor (CPU) engine works fine without them, but the graphics-card version can\'t be built or used until they are installed.'));
-        else if (!d.engine_built && d.gpu !== false && !d.missing.length) box.add_child(note('All packages are here; the graphics-card engine just has to be built (a few minutes). The processor engine keeps working meanwhile.'));
-        if (typMissing) box.add_child(note('Typing: ' + d.missing_typing.join(', ') + ' is not installed. It types the words into your window; without it nothing gets typed.'));
-        if (d.missing_perm) box.add_child(note('Typing permission: a one-time system rule that lets the app use the virtual keyboard (/dev/uinput). Without it nothing gets typed.'));
-        if (noiseMissing) box.add_child(note('Noise suppression: ' + d.missing_noise.join(', ') + ' is not installed. Dictation works without it, but background noise is not filtered out.'));
-        if (pipMissing) box.add_child(note('Better voice detection: ' + d.missing_pip.join(', ') + ' (Python packages for the app, no password needed). Without them a simpler loudness-based detector is used.'));
-        if (busy) {
-            const r = row(); const sp = this._mkSpinner(14); r.add_child(sp); if (!this._spinId) this._spinId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 60, () => this._spinTick());
-            const t = note(d.job.msg || 'Working…', '#fff'); t.x_expand = true; t.y_align = Clutter.ActorAlign.CENTER; r.add_child(t); box.add_child(r);
+        if (!d.components) {
+            box.add_child(note('Log out and back in after updating Voice typing to load the package list.'));
             return box;
         }
-        if (job === 'failed') box.add_child(note(d.job.msg || 'It did not work.', '#ff9a9c'));
-        if (d.missing.length && !d.pkexec) {
-            box.add_child(note('Run this in a terminal to install them:', SEC));
-            const c = note(d.manual, '#fff'); c.clutter_text.selectable = true; box.add_child(c);
+        const mon = Main.layoutManager.primaryMonitor;
+        const maxH = Math.max(140, Math.min(340, (mon?.height || 720) - 440));
+        const scroll = new St.ScrollView({style: `max-height: ${maxH}px;`, overlay_scrollbars: true,
+            hscrollbar_policy: St.PolicyType.NEVER, vscrollbar_policy: St.PolicyType.AUTOMATIC, x_expand: true});
+        const list = new St.BoxLayout({orientation: Clutter.Orientation.VERTICAL, x_expand: true, style: 'spacing: 12px;'});
+        for (const item of d.components) {
+            const row = new St.BoxLayout({x_expand: true, style: 'spacing: 10px;'});
+            const text = new St.BoxLayout({orientation: Clutter.Orientation.VERTICAL, x_expand: true, style: 'spacing: 3px;'});
+            text.add_child(wrapLbl(lbl(item.name, 10.5, '#fff', 'bold')));
+            text.add_child(note(item.description));
+            if (!item.installed && item.note) text.add_child(note(item.note));
+            row.add_child(text);
+            if (item.installed) row.add_child(lbl('Installed', 9, '#7ddc70'));
+            else {
+                const active = busy && d.job?.component === item.id;
+                const button = this._pill(active ? 'Installing…' : job === 'failed' && d.job.component === item.id ? 'Retry' : 'Install', 'primary',
+                    () => this._depsInstall(item), !busy && !this._depsAckPending && item.can_install);
+                button.y_align = Clutter.ActorAlign.START; row.add_child(button);
+            }
+            list.add_child(row);
+            if (!item.installed && !item.can_install && item.manual) {
+                const manual = note('Run in a terminal: ' + item.manual); manual.clutter_text.selectable = true; list.add_child(manual);
+            }
         }
-        const r = row();
-        if (d.pkexec || !d.missing.length) r.add_child(this._pill(job === 'failed' ? 'Try again' : 'Install', 'primary', () => this._depsInstall()));
-        r.add_child(this._pill('Not now', 'plain', () => this._depsNotNow()));
-        box.add_child(r);
-        if (d.missing.length && d.pkexec) box.add_child(note('Install asks for your password once' + (d.missing_perm ? ', installs ' + d.missing.join(' ') + ' and the typing rule.' : ', then runs: ' + d.command_text.replace(/^pkexec /, '')), 'rgba(255,255,255,0.55)', 8.5));
-        else if (d.missing_perm && d.pkexec) box.add_child(note('Install asks for your password once, then adds the typing rule.', 'rgba(255,255,255,0.55)', 8.5));
-        if (pipMissing) box.add_child(note('and downloads into the app: pip install ' + d.missing_pip.join(' '), 'rgba(255,255,255,0.55)', 8.5));
+        scroll.add_child(list); box.add_child(scroll);
+        this._listScroll = scroll; this._restoreScroll();
         return box;
     }
     _dlTickStart() { if (!this._dlTimer) this._dlTimer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 400, () => this._dlTick()); }
